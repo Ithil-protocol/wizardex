@@ -111,6 +111,7 @@ contract FirstInFirstOut {
             underlyingToTransfer = makeData.underlyingAmount - partiallyTaken[price];
             accountingToTransfer = convertToAccounting(partiallyTaken[price], price);
             partiallyTaken[price] = 0;
+            takenId[price] = makeData.next;
         }
 
         if (accountingToTransfer > 0) accounting.safeTransfer(accReceiver, accountingToTransfer);
