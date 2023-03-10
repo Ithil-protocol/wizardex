@@ -33,10 +33,10 @@ contract FirstInFirstOutTest is Test {
         weth.approve(address(swapper), type(uint256).max);
     }
 
-    function testMake(uint256 amount, uint256 price) public returns (uint256, uint256) {
+    function testCreateOrder(uint256 amount, uint256 price) public returns (uint256, uint256) {
         vm.assume(price > 0);
         uint256 initialLastIndex = swapper.id(price);
-        (address lastOwner, uint256 lastAmount, uint256 lastPrevious, uint256 lastNext) = swapper.makes(
+        (address lastOwner, uint256 lastAmount, uint256 lastPrevious, uint256 lastNext) = swapper.orders(
             price,
             initialLastIndex
         );
@@ -44,7 +44,8 @@ contract FirstInFirstOutTest is Test {
         amount = amount % usdc.balanceOf(usdcWhale);
         if (amount == 0) amount++;
 
-        swapper.make(amount, price, usdcWhale);
+        vm.prank(usdcWhale);
+        swapper.createOrder(amount, price);
         assertEq(swapper.id(price), initialLastIndex + 1);
 
         if (initialLastIndex > 0) {
@@ -53,13 +54,13 @@ contract FirstInFirstOutTest is Test {
                 uint256 transformedAmount,
                 uint256 transformedPrevious,
                 uint256 transformedNext
-            ) = swapper.makes(price, initialLastIndex);
+            ) = swapper.orders(price, initialLastIndex);
             assertEq(transformedOwner, lastOwner);
             assertEq(transformedAmount, lastAmount);
             assertEq(transformedPrevious, lastPrevious);
             assertEq(transformedNext, initialLastIndex + 1);
         }
-        (lastOwner, lastAmount, lastPrevious, lastNext) = swapper.makes(price, initialLastIndex + 1);
+        (lastOwner, lastAmount, lastPrevious, lastNext) = swapper.orders(price, initialLastIndex + 1);
 
         assertEq(lastOwner, usdcWhale);
         assertEq(lastAmount, amount);
@@ -68,9 +69,9 @@ contract FirstInFirstOutTest is Test {
         return (amount, initialLastIndex + 1);
     }
 
-    function testTake(uint256 amountMade, uint256 amountTaken, uint256 price) public returns (uint256, uint256) {
+    function testFulillOrder(uint256 amountMade, uint256 amountTaken, uint256 price) public returns (uint256, uint256) {
         uint256 index;
-        (amountMade, index) = testMake(amountMade, price);
+        (amountMade, index) = testCreateOrder(amountMade, price);
 
         vm.assume(amountTaken < usdc.totalSupply());
         uint256 prevUnd = swapper.previewTake(amountTaken, price);
@@ -78,28 +79,29 @@ contract FirstInFirstOutTest is Test {
         if (swapper.convertToAccounting(prevUnd, price) > weth.balanceOf(wethWhale)) {
             vm.startPrank(wethWhale);
             vm.expectRevert(abi.encodePacked("ERC20: transfer amount exceeds balance"));
-            swapper.take(amountTaken, price, wethWhale, address(this));
+            swapper.fulfillOrder(amountTaken, price, address(this));
             vm.stopPrank();
         } else {
             vm.startPrank(wethWhale);
-            underlyingTaken = swapper.take(amountTaken, price, wethWhale, address(this));
+            underlyingTaken = swapper.fulfillOrder(amountTaken, price, address(this));
             assertEq(underlyingTaken, prevUnd);
             vm.stopPrank();
         }
         return (underlyingTaken, index);
     }
 
-    function testRedeemMake(uint256 amountMade, uint256 amountTaken, uint256 price) public {
-        (, uint256 madeIndex) = testTake(amountMade, amountTaken, price);
-        vm.expectRevert(bytes4(keccak256(abi.encodePacked("NotOwner()"))));
-        swapper.redeemMake(price, madeIndex, address(this), address(this));
+    function testCancelOrder(uint256 amountMade, uint256 amountTaken, uint256 price) public {
+        (, uint256 madeIndex) = testFulillOrder(amountMade, amountTaken, price);
+        vm.expectRevert(bytes4(keccak256(abi.encodePacked("RestrictedToOwner()"))));
+        swapper.cancelOrder(price, madeIndex, address(this), address(this));
 
         uint256 initialAccBalance = weth.balanceOf(address(this));
         uint256 initialUndBalance = usdc.balanceOf(address(this));
 
         (uint256 quotedAcc, uint256 quotedUnd) = swapper.previewRedeem(price, madeIndex);
         vm.prank(usdcWhale);
-        swapper.redeemMake(price, madeIndex, address(this), address(this));
+        swapper.cancelOrder(price, madeIndex, address(this), address(this));
+
         assertEq(weth.balanceOf(address(this)), initialAccBalance + quotedAcc);
         assertEq(usdc.balanceOf(address(this)), initialUndBalance + quotedUnd);
     }
@@ -110,16 +112,16 @@ contract FirstInFirstOutTest is Test {
 
         uint256 index1;
         uint256 index2;
-        (made1, index1) = testMake(made1, price);
+        (made1, index1) = testCreateOrder(made1, price);
         made2 = usdc.balanceOf(usdcWhale) == 0 ? 0 : made2 % usdc.balanceOf(usdcWhale);
-        (made2, index2) = testMake(made2, price);
+        (made2, index2) = testCreateOrder(made2, price);
 
         // Taker can afford to take
         uint256 maxTaken = swapper.convertToUnderlying(weth.balanceOf(wethWhale), price);
         taken = maxTaken == 0 ? 0 : taken % maxTaken;
 
         vm.prank(wethWhale);
-        swapper.take(taken, price, wethWhale, address(this));
+        swapper.fulfillOrder(taken, price, address(this));
 
         (uint256 prevAcc1, uint256 prevUnd1) = swapper.previewRedeem(price, index1);
         (uint256 prevAcc2, uint256 prevUnd2) = swapper.previewRedeem(price, index2);
