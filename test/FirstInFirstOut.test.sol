@@ -5,6 +5,8 @@ import { IERC20, IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/exte
 import { Test } from "forge-std/Test.sol";
 import { FirstInFirstOut } from "../src/FirstInFirstOut.sol";
 
+import { console2 } from "forge-std/console2.sol";
+
 contract FirstInFirstOutTest is Test {
     FirstInFirstOut internal immutable swapper;
 
@@ -69,13 +71,17 @@ contract FirstInFirstOutTest is Test {
         return (amount, initialLastIndex + 1);
     }
 
-    function testFulillOrder(uint256 amountMade, uint256 amountTaken, uint256 price) public returns (uint256, uint256) {
+    function testFulfillOrder(uint256 amountMade, uint256 amountTaken, uint256 price)
+        public
+        returns (uint256, uint256, uint256, uint256)
+    {
         uint256 index;
         (amountMade, index) = testCreateOrder(amountMade, price);
 
         vm.assume(amountTaken < usdc.totalSupply());
-        uint256 prevUnd = swapper.previewTake(amountTaken, price);
+        (uint256 prevAcc, uint256 prevUnd) = swapper.previewTake(amountTaken, price);
         uint256 underlyingTaken;
+        uint256 accountingTransfered;
         if (swapper.convertToAccounting(prevUnd, price) > weth.balanceOf(wethWhale)) {
             vm.startPrank(wethWhale);
             vm.expectRevert(abi.encodePacked("ERC20: transfer amount exceeds balance"));
@@ -83,32 +89,53 @@ contract FirstInFirstOutTest is Test {
             vm.stopPrank();
         } else {
             vm.startPrank(wethWhale);
-            underlyingTaken = swapper.fulfillOrder(amountTaken, price, address(this));
+            (accountingTransfered, underlyingTaken) = swapper.fulfillOrder(amountTaken, price, address(this));
             assertEq(underlyingTaken, prevUnd);
             vm.stopPrank();
         }
-        return (underlyingTaken, index);
+        return (amountMade, underlyingTaken, accountingTransfered, index);
     }
 
     function testCancelOrder(uint256 amountMade, uint256 amountTaken, uint256 price) public {
-        (, uint256 madeIndex) = testFulillOrder(amountMade, amountTaken, price);
+        uint256 underlyingTaken = 0;
+        uint256 accountingTransfered = 0;
+        uint256 madeIndex = 0;
+
+        uint256 initialThisBalance = weth.balanceOf(address(swapper));
+        uint256 initialAccBalance = weth.balanceOf(usdcWhale);
+        (amountMade, underlyingTaken, accountingTransfered, madeIndex) = testFulfillOrder(
+            amountMade,
+            amountTaken,
+            price
+        );
+
+        uint256 initialUndBalance = usdc.balanceOf(usdcWhale);
+
         vm.expectRevert(bytes4(keccak256(abi.encodePacked("RestrictedToOwner()"))));
-        swapper.cancelOrder(price, madeIndex, address(this), address(this));
+        swapper.cancelOrder(madeIndex, price);
 
-        uint256 initialAccBalance = weth.balanceOf(address(this));
-        uint256 initialUndBalance = usdc.balanceOf(address(this));
-
-        (uint256 quotedAcc, uint256 quotedUnd) = swapper.previewRedeem(price, madeIndex);
-        vm.prank(usdcWhale);
-        swapper.cancelOrder(price, madeIndex, address(this), address(this));
-
-        assertEq(weth.balanceOf(address(this)), initialAccBalance + quotedAcc);
-        assertEq(usdc.balanceOf(address(this)), initialUndBalance + quotedUnd);
+        uint256 quotedUnd = swapper.previewRedeem(madeIndex, price);
+        if (underlyingTaken >= amountMade) {
+            // the order has been taken totally
+            vm.startPrank(usdcWhale);
+            vm.expectRevert(bytes4(keccak256(abi.encodePacked("RestrictedToOwner()"))));
+            swapper.cancelOrder(madeIndex, price);
+            vm.stopPrank();
+            assertEq(weth.balanceOf(usdcWhale), initialAccBalance + accountingTransfered);
+            assertEq(usdc.balanceOf(address(this)), initialThisBalance + amountMade);
+        } else {
+            vm.prank(usdcWhale);
+            swapper.cancelOrder(madeIndex, price);
+            assertEq(usdc.balanceOf(usdcWhale), initialUndBalance + quotedUnd);
+        }
     }
 
     function testFirstInFirstOut(uint256 made1, uint256 made2, uint256 taken, uint256 price) public {
         // do not allow absurdely high prices that cause overflows
         vm.assume(price < type(uint256).max / weth.balanceOf(wethWhale));
+
+        uint256 initialWethBalance = weth.balanceOf(usdcWhale);
+        uint256 initialUsdcBalance = usdc.balanceOf(wethWhale);
 
         uint256 index1;
         uint256 index2;
@@ -121,25 +148,25 @@ contract FirstInFirstOutTest is Test {
         taken = maxTaken == 0 ? 0 : taken % maxTaken;
 
         vm.prank(wethWhale);
-        swapper.fulfillOrder(taken, price, address(this));
+        (uint256 accountingToTransfer, uint256 underlyingToTransfer) = swapper.fulfillOrder(taken, price, wethWhale);
+        assertEq(weth.balanceOf(usdcWhale), initialWethBalance + accountingToTransfer);
+        assertEq(usdc.balanceOf(wethWhale), initialUsdcBalance + underlyingToTransfer);
 
-        (uint256 prevAcc1, uint256 prevUnd1) = swapper.previewRedeem(price, index1);
-        (uint256 prevAcc2, uint256 prevUnd2) = swapper.previewRedeem(price, index2);
+        uint256 prevAcc1 = swapper.previewRedeem(index1, price);
+        uint256 prevAcc2 = swapper.previewRedeem(index2, price);
 
-        if (taken < made1) {
+        if (underlyingToTransfer < made1) {
             // The second order is not filled, thus its redeem is totally in underlying
-            assertEq(prevAcc2, 0);
-            assertEq(prevUnd2, made2);
-        } else if (taken >= made1 + made2) {
+            assertEq(prevAcc1, made1 - underlyingToTransfer);
+            assertEq(prevAcc2, made2);
+        } else if (underlyingToTransfer >= made1 + made2) {
             // Both orders are filled: redeem is totally in accounting
-            assertEq(prevAcc1, swapper.convertToAccounting(made1, price));
-            assertEq(prevUnd1, 0);
-            assertEq(prevAcc2, swapper.convertToAccounting(made2, price));
-            assertEq(prevUnd2, 0);
+            assertEq(prevAcc1, 0);
+            assertEq(prevAcc2, 0);
         } else {
             // The first order is filled, thus its redeem is totally in accounting
-            assertEq(prevAcc1, swapper.convertToAccounting(made1, price));
-            assertEq(prevUnd1, 0);
+            assertEq(prevAcc1, 0);
+            assertEq(prevAcc2, made2 - (underlyingToTransfer - made1));
         }
     }
 }
