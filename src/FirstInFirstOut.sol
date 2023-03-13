@@ -29,16 +29,18 @@ contract FirstInFirstOut {
 
     // id of the order to access its data, by price
     mapping(uint256 => uint256) public id;
-    // the id of the last taken order, by price
-    mapping(uint256 => uint256) public takenId;
-    // the partial takes, by price
-    mapping(uint256 => uint256) public partiallyTaken;
     // orders[price][id]
     mapping(uint256 => mapping(uint256 => Order)) public orders;
 
-    event OrderCreated(address indexed offerer, uint256 amount, uint256 price);
-    event OrderFulfilled(address indexed offerer, address indexed fulfiller, uint256 amount, uint256 price);
-    event OrderCancelled(address indexed offerer, uint256 accountingToTransfer, uint256 underlyingToTransfer);
+    event OrderCreated(address indexed offerer, uint256 index, uint256 amount, uint256 price);
+    event OrderFulfilled(
+        address indexed offerer,
+        address indexed fulfiller,
+        uint256 accountingToTransfer,
+        uint256 amount,
+        uint256 price
+    );
+    event OrderCancelled(address indexed offerer, uint256 index, uint256 price, uint256 underlyingToTransfer);
 
     error RestrictedToOwner();
     error NullAmount();
@@ -79,6 +81,7 @@ contract FirstInFirstOut {
         orders[price][toDelete.next].previous = toDelete.previous;
 
         delete orders[price][index];
+        emit OrderCancelled(toDelete.offerer, index, price, toDelete.underlyingAmount);
     }
 
     // Add a node to the list
@@ -88,133 +91,83 @@ contract FirstInFirstOut {
         underlying.safeTransferFrom(msg.sender, address(this), amount);
         _addNode(price, amount, msg.sender);
 
-        // If takenId[price] = 0 all the amount has been taken
-        // In this case, the first order is the one we are placing now
-        if (takenId[price] == 0) takenId[price] = id[price];
-
-        emit OrderCreated(msg.sender, amount, price);
+        emit OrderCreated(msg.sender, id[price], amount, price);
     }
 
-    function cancelOrder(uint256 price, uint256 index, address accReceiver, address undReceiver)
-        public
-        returns (uint256, uint256)
-    {
+    function cancelOrder(uint256 index, uint256 price) public returns (uint256) {
         Order memory order = orders[price][index];
         if (order.offerer != msg.sender) revert RestrictedToOwner();
 
         _deleteNode(price, index);
 
-        uint256 accountingToTransfer = 0;
-        uint256 underlyingToTransfer = 0;
-        if (takenId[price] < index && takenId[price] != 0) {
-            // the order has not been taken yet
-            underlyingToTransfer = order.underlyingAmount;
-        } else if (takenId[price] == index) {
-            // the order is partially taken
-            underlyingToTransfer = order.underlyingAmount - partiallyTaken[price];
-            accountingToTransfer = convertToAccounting(partiallyTaken[price], price);
-            partiallyTaken[price] = 0;
-            takenId[price] = order.next;
-        }
-        // TODO move to fulfillOrder
-        else if (takenId[price] > index || takenId[price] == 0) {
-            // the order is fully taken
-            accountingToTransfer = convertToAccounting(order.underlyingAmount, price);
-        }
+        if (order.underlyingAmount > 0) underlying.safeTransfer(msg.sender, order.underlyingAmount);
 
-        if (accountingToTransfer > 0) accounting.safeTransfer(accReceiver, accountingToTransfer);
-        if (underlyingToTransfer > 0) underlying.safeTransfer(undReceiver, underlyingToTransfer);
-
-        emit OrderCancelled(order.offerer, accountingToTransfer, underlyingToTransfer);
-
-        return (accountingToTransfer, underlyingToTransfer);
+        return order.underlyingAmount;
     }
 
     // amount is always of underlying currency
-    function fulfillOrder(uint256 amount, uint256 price, address receiver) public returns (uint256) {
-        uint256 cursor = takenId[price];
+    function fulfillOrder(uint256 amount, uint256 price, address receiver) public returns (uint256, uint256) {
+        uint256 cursor = orders[price][0].next;
         Order memory order = orders[price][cursor];
 
-        uint256 underlyingToTransfer = 0;
+        uint256 accountingToTransfer = 0;
         uint256 initialAmount = amount;
-        uint256 currentlyTaken = partiallyTaken[price];
 
-        while (underlyingToTransfer <= initialAmount) {
-            if (amount < order.underlyingAmount - currentlyTaken) {
-                // Partial take of the current order
-                partiallyTaken[price] = currentlyTaken + amount;
-                underlyingToTransfer += amount;
-                takenId[price] = cursor;
-                break;
-            } else {
-                currentlyTaken = 0;
-                underlyingToTransfer += (order.underlyingAmount - currentlyTaken);
-                amount -= (order.underlyingAmount - currentlyTaken);
-                cursor = order.next;
-                // in case the next is zero, we reached the end of all orders
-                if (cursor == 0) {
-                    takenId[price] = cursor;
-                    break;
-                }
-                order = orders[price][cursor];
-            }
+        while (amount >= order.underlyingAmount) {
+            uint256 toTransfer = convertToAccounting(order.underlyingAmount, price);
+            accounting.safeTransferFrom(msg.sender, order.offerer, toTransfer);
+            accountingToTransfer += toTransfer;
+            _deleteNode(price, cursor);
+            amount -= order.underlyingAmount;
+            cursor = order.next;
+            // in case the next is zero, we reached the end of all orders
+            if (cursor == 0) break;
+            order = orders[price][cursor];
         }
 
-        accounting.safeTransferFrom(msg.sender, address(this), convertToAccounting(underlyingToTransfer, price));
-        underlying.safeTransfer(receiver, underlyingToTransfer);
+        if (amount > 0 && cursor != 0) {
+            uint256 toTransfer = convertToAccounting(amount, price);
+            accounting.safeTransferFrom(msg.sender, order.offerer, toTransfer);
+            accountingToTransfer += toTransfer;
+            orders[price][cursor].underlyingAmount -= amount;
+            amount = 0;
+        }
 
-        // TODO transfer amount to the offerer(s)
+        underlying.safeTransfer(receiver, initialAmount - amount);
 
-        emit OrderFulfilled(order.offerer, msg.sender, amount, price); // TODO calculate actual settlement price
+        emit OrderFulfilled(order.offerer, msg.sender, accountingToTransfer, initialAmount - amount, price);
+        // TODO calculate actual settlement price
 
-        return underlyingToTransfer;
+        return (accountingToTransfer, initialAmount - amount);
     }
 
     // View function to calculate how much accounting the taker needs to take amount
-    function previewTake(uint256 amount, uint256 price) public view returns (uint256) {
-        uint256 cursor = takenId[price];
+    function previewTake(uint256 amount, uint256 price) public view returns (uint256, uint256) {
+        uint256 cursor = orders[price][0].next;
         Order memory order = orders[price][cursor];
 
-        uint256 underlyingToTransfer;
-        uint256 currentlyTaken = partiallyTaken[price];
-
-        while (underlyingToTransfer <= amount) {
-            if (amount < order.underlyingAmount - currentlyTaken) {
-                // Partial take of the current order
-                underlyingToTransfer += amount;
-                break;
-            } else {
-                currentlyTaken = 0;
-                underlyingToTransfer += (order.underlyingAmount - currentlyTaken);
-                amount -= (order.underlyingAmount - currentlyTaken);
-                cursor = order.next;
-                // in case the next is zero, we reached the end of all orders
-                if (cursor == 0) break;
-                order = orders[price][cursor];
-            }
+        uint256 accountingToTransfer = 0;
+        uint256 initialAmount = amount;
+        while (amount >= order.underlyingAmount) {
+            uint256 toTransfer = convertToAccounting(order.underlyingAmount, price);
+            accountingToTransfer += toTransfer;
+            amount -= order.underlyingAmount;
+            cursor = order.next;
+            // in case the next is zero, we reached the end of all orders
+            if (cursor == 0) break;
+            order = orders[price][cursor];
         }
-        return underlyingToTransfer;
+
+        if (amount > 0 && cursor != 0) {
+            uint256 toTransfer = convertToAccounting(amount, price);
+            accountingToTransfer += toTransfer;
+            amount = 0;
+        }
+        return (accountingToTransfer, initialAmount - amount);
     }
 
     // View function to calculate how much accounting and underlying a redeem would return
-    function previewRedeem(uint256 price, uint256 index) public view returns (uint256, uint256) {
-        Order memory order = orders[price][index];
-
-        uint256 accountingToTransfer;
-        uint256 underlyingToTransfer;
-        if (takenId[price] < index && takenId[price] != 0) {
-            // the order has not been taken yet
-            underlyingToTransfer = order.underlyingAmount;
-        }
-        if (takenId[price] > index || takenId[price] == 0) {
-            // the order is fully taken
-            accountingToTransfer = convertToAccounting(order.underlyingAmount, price);
-        }
-        if (takenId[price] == index) {
-            // the order is partially taken
-            underlyingToTransfer = order.underlyingAmount - partiallyTaken[price];
-            accountingToTransfer = convertToAccounting(partiallyTaken[price], price);
-        }
-        return (accountingToTransfer, underlyingToTransfer);
+    function previewRedeem(uint256 index, uint256 price) public view returns (uint256) {
+        return orders[price][index].underlyingAmount;
     }
 }
