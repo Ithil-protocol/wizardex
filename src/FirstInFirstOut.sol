@@ -29,8 +29,6 @@ contract FirstInFirstOut {
 
     // id of the order to access its data, by price
     mapping(uint256 => uint256) public id;
-    // the id of the last taken order, by price
-    mapping(uint256 => uint256) public takenId;
     // orders[price][id]
     mapping(uint256 => mapping(uint256 => Order)) public orders;
 
@@ -93,10 +91,6 @@ contract FirstInFirstOut {
         underlying.safeTransferFrom(msg.sender, address(this), amount);
         _addNode(price, amount, msg.sender);
 
-        // If takenId[price] = 0 all the amount has been taken
-        // In this case, the first order is the one we are placing now
-        if (takenId[price] == 0) takenId[price] = id[price];
-
         emit OrderCreated(msg.sender, id[price], amount, price);
     }
 
@@ -113,7 +107,7 @@ contract FirstInFirstOut {
 
     // amount is always of underlying currency
     function fulfillOrder(uint256 amount, uint256 price, address receiver) public returns (uint256, uint256) {
-        uint256 cursor = takenId[price];
+        uint256 cursor = orders[price][0].next;
         Order memory order = orders[price][cursor];
 
         uint256 accountingToTransfer = 0;
@@ -127,10 +121,7 @@ contract FirstInFirstOut {
             amount -= order.underlyingAmount;
             cursor = order.next;
             // in case the next is zero, we reached the end of all orders
-            if (cursor == 0) {
-                takenId[price] = cursor;
-                break;
-            }
+            if (cursor == 0) break;
             order = orders[price][cursor];
         }
 
@@ -140,19 +131,19 @@ contract FirstInFirstOut {
             accountingToTransfer += toTransfer;
             orders[price][cursor].underlyingAmount -= amount;
             amount = 0;
-            takenId[price] = cursor;
         }
 
         underlying.safeTransfer(receiver, initialAmount - amount);
 
-        emit OrderFulfilled(order.offerer, msg.sender, accountingToTransfer, initialAmount - amount, price); // TODO calculate actual settlement price
+        emit OrderFulfilled(order.offerer, msg.sender, accountingToTransfer, initialAmount - amount, price);
+        // TODO calculate actual settlement price
 
         return (accountingToTransfer, initialAmount - amount);
     }
 
     // View function to calculate how much accounting the taker needs to take amount
     function previewTake(uint256 amount, uint256 price) public view returns (uint256, uint256) {
-        uint256 cursor = takenId[price];
+        uint256 cursor = orders[price][0].next;
         Order memory order = orders[price][cursor];
 
         uint256 accountingToTransfer = 0;
