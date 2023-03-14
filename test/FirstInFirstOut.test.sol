@@ -2,8 +2,11 @@
 pragma solidity =0.8.17;
 
 import { IERC20, IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import { ERC20Burnable } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { Test } from "forge-std/Test.sol";
 import { FirstInFirstOut } from "../src/FirstInFirstOut.sol";
+import { DexToken } from "../src/DexToken.sol";
 
 import { console2 } from "forge-std/console2.sol";
 
@@ -12,6 +15,7 @@ contract FirstInFirstOutTest is Test {
 
     IERC20Metadata internal constant usdc = IERC20Metadata(0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8);
     IERC20Metadata internal constant weth = IERC20Metadata(0x82aF49447D8a07e3bd95BD0d56f35241523fBab1);
+    DexToken internal immutable dexToken;
     uint256 internal immutable priceResolution;
 
     address internal constant usdcWhale = 0x8b8149Dd385955DC1cE77a4bE7700CCD6a212e65; // this will be the maker
@@ -23,8 +27,8 @@ contract FirstInFirstOutTest is Test {
     constructor() {
         uint256 forkId = vm.createFork(vm.envString(rpcUrl), blockNumber);
         vm.selectFork(forkId);
-
-        swapper = new FirstInFirstOut(usdc, weth);
+        dexToken = new DexToken(1e18, 1000);
+        swapper = new FirstInFirstOut(usdc, weth, dexToken);
         priceResolution = 10**weth.decimals();
     }
 
@@ -38,7 +42,7 @@ contract FirstInFirstOutTest is Test {
     function testCreateOrder(uint256 amount, uint256 price) public returns (uint256, uint256) {
         vm.assume(price > 0);
         uint256 initialLastIndex = swapper.id(price);
-        (address lastOwner, uint256 lastAmount, uint256 lastPrevious, uint256 lastNext) = swapper.orders(
+        (address lastOwner, uint256 lastAmount, , uint256 lastPrevious, uint256 lastNext) = swapper.orders(
             price,
             initialLastIndex
         );
@@ -46,14 +50,16 @@ contract FirstInFirstOutTest is Test {
         amount = amount % usdc.balanceOf(usdcWhale);
         if (amount == 0) amount++;
 
+        uint256 previous = swapper.getInsertionIndex(price, 0);
         vm.prank(usdcWhale);
-        swapper.createOrder(amount, price);
+        swapper.createOrder(amount, 0, price, previous);
         assertEq(swapper.id(price), initialLastIndex + 1);
 
         if (initialLastIndex > 0) {
             (
                 address transformedOwner,
                 uint256 transformedAmount,
+                ,
                 uint256 transformedPrevious,
                 uint256 transformedNext
             ) = swapper.orders(price, initialLastIndex);
@@ -62,7 +68,7 @@ contract FirstInFirstOutTest is Test {
             assertEq(transformedPrevious, lastPrevious);
             assertEq(transformedNext, initialLastIndex + 1);
         }
-        (lastOwner, lastAmount, lastPrevious, lastNext) = swapper.orders(price, initialLastIndex + 1);
+        (lastOwner, lastAmount, , lastPrevious, lastNext) = swapper.orders(price, initialLastIndex + 1);
 
         assertEq(lastOwner, usdcWhale);
         assertEq(lastAmount, amount);
