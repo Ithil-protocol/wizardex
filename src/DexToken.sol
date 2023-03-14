@@ -43,14 +43,15 @@ contract DexToken is ERC20Burnable, Ownable {
         // gasSavings
         uint256 totalSupply = totalSupply();
         uint256 discountedPrice;
+        uint256 toReceive = (msg.value * 10**18) / price;
         if (totalSupply != 0) {
-            // first we increase the price by the purchased msg.value
-            uint256 increasedPrice = (price * (totalSupply + msg.value) - 1) / totalSupply + 1;
+            // first we increase the price by the purchased amount (round up)
+            uint256 increasedPrice = (price * (totalSupply + toReceive) - 1) / totalSupply + 1;
             // then we discount it dutch auction style (round up)
             discountedPrice = (increasedPrice * halfTime - 1) / (block.timestamp - latest + halfTime) + 1;
         } else discountedPrice = price;
         // tokens out, thus we round down
-        uint256 toReceive = (msg.value * 10**18) / discountedPrice;
+        toReceive = (msg.value * 10**18) / discountedPrice;
         require(toReceive >= minAmountOut, "Slippage exceeded");
         _mint(recipient, toReceive);
         price = discountedPrice;
