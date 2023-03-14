@@ -10,7 +10,6 @@ contract Token is ERC20Burnable, Ownable {
     uint256 public halfTime;
     uint256 public latest;
 
-    error RestrictedToOwner();
     error SlippageExceeded();
 
     constructor(string memory name, string memory symbol, uint256 _initialPrice, uint256 _halfTime)
