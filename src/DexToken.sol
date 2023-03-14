@@ -8,7 +8,7 @@ import { IDexToken } from "../interfaces/IDexToken.sol";
 contract DexToken is ERC20, IDexToken {
     // TODO: add events
 
-    uint256 price;
+    uint256 public price;
     IERC20Metadata public paymentToken;
     address public treasury;
     address public manager;
