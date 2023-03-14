@@ -4,6 +4,7 @@ pragma solidity =0.8.17;
 import { IERC20, ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import { ERC20Burnable } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
 contract FirstInFirstOut {
@@ -15,6 +16,7 @@ contract FirstInFirstOut {
     struct Order {
         address offerer;
         uint256 underlyingAmount;
+        uint256 staked;
         uint256 previous;
         uint256 next;
     }
@@ -44,6 +46,7 @@ contract FirstInFirstOut {
 
     error RestrictedToOwner();
     error NullAmount();
+    error WrongIndex();
 
     constructor(IERC20 _underlying, IERC20Metadata _accounting) {
         accounting = _accounting;
@@ -64,14 +67,21 @@ contract FirstInFirstOut {
         return underlyingAmount.mulDiv(_priceResolution, price, Math.Rounding.Up);
     }
 
-    function _addNode(uint256 price, uint256 amount, address maker) internal {
+    function _addNode(uint256 price, uint256 amount, uint256 staked, address maker) internal {
         // The "next" index of the last order is 0
         id[price]++;
-        orders[price][id[price]] = Order(maker, amount, orders[price][0].previous, 0);
+        uint256 previous = orders[price][0].previous;
+        uint256 next = 0;
+        // Get the latest position such that staked <= orders[price][previous].staked
+        while (staked > orders[price][previous].staked && previous != 0) {
+            next = orders[price][previous].next;
+            previous = orders[price][previous].previous;
+        }
+        orders[price][id[price]] = Order(maker, amount, staked, previous, next);
         // The "next" index of the previous node is now id[price] (already bumped by 1)
-        orders[price][orders[price][0].previous].next = id[price];
+        orders[price][previous].next = id[price];
         // The "previous" index of the 0 node is now id[price]
-        orders[price][0].previous = id[price];
+        orders[price][next].previous = id[price];
     }
 
     function _deleteNode(uint256 price, uint256 index) internal {
@@ -85,11 +95,11 @@ contract FirstInFirstOut {
     }
 
     // Add a node to the list
-    function createOrder(uint256 amount, uint256 price) public {
+    function createOrder(uint256 amount, uint256 staked, uint256 price) public {
         if (amount == 0 || price == 0) revert NullAmount();
 
         underlying.safeTransferFrom(msg.sender, address(this), amount);
-        _addNode(price, amount, msg.sender);
+        _addNode(price, amount, staked, msg.sender);
 
         emit OrderCreated(msg.sender, id[price], amount, price);
     }
@@ -100,7 +110,7 @@ contract FirstInFirstOut {
 
         _deleteNode(price, index);
 
-        if (order.underlyingAmount > 0) underlying.safeTransfer(msg.sender, order.underlyingAmount);
+        underlying.safeTransfer(msg.sender, order.underlyingAmount);
 
         return order.underlyingAmount;
     }
@@ -130,6 +140,7 @@ contract FirstInFirstOut {
             accounting.safeTransferFrom(msg.sender, order.offerer, toTransfer);
             accountingToTransfer += toTransfer;
             orders[price][cursor].underlyingAmount -= amount;
+
             amount = 0;
         }
 
