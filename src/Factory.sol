@@ -15,11 +15,11 @@ contract Factory is Ownable {
         token = _token;
     }
 
-    function createPool(address underlying, address accounting) external returns (address) {
+    function createPool(address underlying, address accounting, uint256 minimumBidStep) external returns (address) {
         assert(token != address(0));
 
         if (pools[underlying][accounting] == address(0)) {
-            pools[underlying][accounting] = address(new Pool(underlying, accounting, token));
+            pools[underlying][accounting] = address(new Pool(underlying, accounting, token, minimumBidStep));
 
             emit NewPool(underlying, accounting);
         }

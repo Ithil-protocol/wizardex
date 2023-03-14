@@ -30,7 +30,7 @@ contract PoolTest is Test {
         dexToken = new Token("token", "TKN", 1e18, 1000);
         factory = new Factory();
         factory.setToken(address(dexToken));
-        swapper = Pool(factory.createPool(address(usdc), address(weth)));
+        swapper = Pool(factory.createPool(address(usdc), address(weth), 1e14));
         priceResolution = 10**weth.decimals();
     }
 
@@ -42,7 +42,7 @@ contract PoolTest is Test {
     }
 
     function testCreateOrder(uint256 amount, uint256 price) public returns (uint256, uint256) {
-        vm.assume(price > 0);
+        vm.assume(price > 0 && price < type(uint256).max / 1e18);
         uint256 initialLastIndex = swapper.id(price);
         (address lastOwner, uint256 lastAmount, , uint256 lastPrevious, uint256 lastNext) = swapper.orders(
             price,
@@ -52,9 +52,8 @@ contract PoolTest is Test {
         amount = amount % usdc.balanceOf(usdcWhale);
         if (amount == 0) amount++;
 
-        uint256 previous = swapper.getInsertionIndex(price, 0);
         vm.prank(usdcWhale);
-        swapper.createOrder(amount, 0, price, previous);
+        swapper.createOrder(amount, 0, price);
         assertEq(swapper.id(price), initialLastIndex + 1);
 
         if (initialLastIndex > 0) {
@@ -87,17 +86,17 @@ contract PoolTest is Test {
         (amountMade, index) = testCreateOrder(amountMade, price);
 
         vm.assume(amountTaken < usdc.totalSupply());
-        (, uint256 prevUnd) = swapper.previewTake(amountTaken, price);
+        (uint256 accountingToPay, uint256 prevUnd) = swapper.previewTake(amountTaken);
         uint256 underlyingTaken;
         uint256 accountingTransfered;
-        if (swapper.convertToAccounting(prevUnd, price) > weth.balanceOf(wethWhale)) {
+        if (accountingToPay > weth.balanceOf(wethWhale)) {
             vm.startPrank(wethWhale);
             vm.expectRevert(abi.encodePacked("ERC20: transfer amount exceeds balance"));
-            swapper.fulfillOrder(amountTaken, price, address(this));
+            swapper.fulfillOrder(amountTaken, address(this));
             vm.stopPrank();
         } else {
             vm.startPrank(wethWhale);
-            (accountingTransfered, underlyingTaken) = swapper.fulfillOrder(amountTaken, price, address(this));
+            (accountingTransfered, underlyingTaken) = swapper.fulfillOrder(amountTaken, address(this));
             assertEq(underlyingTaken, prevUnd);
             vm.stopPrank();
         }
@@ -156,7 +155,7 @@ contract PoolTest is Test {
         taken = maxTaken == 0 ? 0 : taken % maxTaken;
 
         vm.prank(wethWhale);
-        (uint256 accountingToTransfer, uint256 underlyingToTransfer) = swapper.fulfillOrder(taken, price, wethWhale);
+        (uint256 accountingToTransfer, uint256 underlyingToTransfer) = swapper.fulfillOrder(taken, wethWhale);
         assertEq(weth.balanceOf(usdcWhale), initialWethBalance + accountingToTransfer);
         assertEq(usdc.balanceOf(wethWhale), initialUsdcBalance + underlyingToTransfer);
 
