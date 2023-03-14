@@ -48,7 +48,7 @@ contract Token is ERC20Burnable, Ownable {
         // tokens going out, thus we round down
         uint256 obtained = (msg.value * 1e18) / discountedPrice;
 
-        if (obtained >= minAmountOut) revert SlippageExceeded();
+        if (obtained < minAmountOut) revert SlippageExceeded();
         _mint(recipient, obtained);
 
         // Save new price
