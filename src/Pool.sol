@@ -3,12 +3,8 @@ pragma solidity =0.8.17;
 
 import { IERC20, ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import { ERC20Burnable } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { Token } from "./Token.sol";
-
-import { console2 } from "forge-std/console2.sol";
 
 contract Pool {
     using SafeERC20 for ERC20;
@@ -35,15 +31,15 @@ contract Pool {
     ERC20 public immutable underlying;
 
     // the accounting token decimals (stored to save gas);
-    uint256 internal immutable _priceResolution;
+    uint256 public immutable priceResolution;
 
-    // the minimum spacing percentage between prices, 1e18 corresponding to 100%
+    // The minimum spacing percentage between prices, 1e18 corresponding to 100%
     // lower values allow for a more fluid price but frontrunning is exacerbated and staking less useful
     // higher values make token staking useful and frontrunning exploit less feasible
     // but makers must choose between more stringent bids
     // lower values are indicated for stable pairs
     // higher vlaues are indicated for more volatile pairs
-    uint256 internal immutable minimumStep;
+    uint256 public immutable tick;
 
     Token public dexToken;
     // id of the order to access its data, by price
@@ -62,52 +58,52 @@ contract Pool {
     event OrderCancelled(address indexed offerer, uint256 index, uint256 price, uint256 underlyingToTransfer);
 
     error RestrictedToOwner();
-    error StepNotRespected();
+    error IncorrectTickSpacing();
     error NullAmount();
     error WrongIndex();
 
-    constructor(address _underlying, address _accounting, address _dexToken, uint256 _minimumStep) {
+    constructor(address _underlying, address _accounting, address _dexToken, uint256 _tick) {
         accounting = ERC20(_accounting);
-        _priceResolution = 10**accounting.decimals();
+        priceResolution = 10**accounting.decimals();
 
         underlying = ERC20(_underlying);
         dexToken = Token(_dexToken);
-        minimumStep = _minimumStep;
+        tick = _tick;
     }
 
     // Example WETH / USDC, maker USDC, taker WETH
-    // _priceResolution = 1e18 (decimals of WETH)
+    // priceResolution = 1e18 (decimals of WETH)
     // Price = 1753.54 WETH/USDC -> 1753540000 (it has USDC decimals)
     // Sell 2.3486 WETH -> accountingAmount = 2348600000000000000
     // underlyingOut = 2348600000000000000 * 1753540000 / 1e18 = 4118364044 -> 4,118.364044 USDC
     function convertToUnderlying(uint256 accountingAmount, uint256 price) public view returns (uint256) {
-        return accountingAmount.mulDiv(price, _priceResolution, Math.Rounding.Down);
+        return accountingAmount.mulDiv(price, priceResolution, Math.Rounding.Down);
     }
 
     function convertToAccounting(uint256 underlyingAmount, uint256 price) public view returns (uint256) {
-        return underlyingAmount.mulDiv(_priceResolution, price, Math.Rounding.Up);
+        return underlyingAmount.mulDiv(priceResolution, price, Math.Rounding.Up);
     }
 
     function _checkSpacing(uint256 lower, uint256 higher) internal view returns (bool) {
-        return (higher >= lower.mulDiv(minimumStep + 1e18, 1e18, Math.Rounding.Up)) || lower == 0;
+        return lower == 0 || higher >= lower.mulDiv(tick + 1e18, 1e18, Math.Rounding.Up);
     }
 
-    function _addPriceLevel(uint256 price) internal {
+    function _addNode(uint256 price, uint256 amount, uint256 staked, address maker) internal {
         uint256 higherPrice = 0;
         while (priceLevels[higherPrice] > price) {
             higherPrice = priceLevels[higherPrice];
         }
+
         if (priceLevels[higherPrice] < price) {
             if (
                 !_checkSpacing(priceLevels[higherPrice], price) ||
                 (!_checkSpacing(price, higherPrice) && higherPrice != 0)
-            ) revert StepNotRespected();
+            ) revert IncorrectTickSpacing();
+
             priceLevels[price] = priceLevels[higherPrice];
             priceLevels[higherPrice] = price;
         }
-    }
 
-    function _addNode(uint256 price, uint256 amount, uint256 staked, address maker) internal {
         // The "next" index of the last order is 0
         id[price]++;
         uint256 previous = 0;
@@ -139,9 +135,9 @@ contract Pool {
     // Add a node to the list
     function createOrder(uint256 amount, uint256 staked, uint256 price) external {
         if (amount == 0 || price == 0) revert NullAmount();
+
         underlying.safeTransferFrom(msg.sender, address(this), amount);
         if (staked > 0) dexToken.safeTransferFrom(msg.sender, address(this), staked);
-        _addPriceLevel(price);
         _addNode(price, amount, staked, msg.sender);
 
         emit OrderCreated(msg.sender, id[price], amount, price);
@@ -172,6 +168,7 @@ contract Pool {
             accountingToPay += payStep;
             if (amount > 0) priceLevels[0] = priceLevels[priceLevels[0]];
         }
+
         return (accountingToPay, initialAmount - amount);
     }
 
@@ -225,6 +222,7 @@ contract Pool {
             accountingToPay += payStep;
             price = priceLevels[price];
         }
+
         return (accountingToPay, initialAmount - amount);
     }
 
@@ -250,6 +248,7 @@ contract Pool {
             accountingToTransfer += toTransfer;
             amount = 0;
         }
+
         return (accountingToTransfer, initialAmount - amount);
     }
 

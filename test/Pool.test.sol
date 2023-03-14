@@ -28,8 +28,7 @@ contract PoolTest is Test {
         uint256 forkId = vm.createFork(vm.envString(rpcUrl), blockNumber);
         vm.selectFork(forkId);
         dexToken = new Token("token", "TKN", 1e18, 1000);
-        factory = new Factory();
-        factory.setToken(address(dexToken));
+        factory = new Factory(address(dexToken));
         swapper = Pool(factory.createPool(address(usdc), address(weth), 1e14));
         priceResolution = 10**weth.decimals();
     }
