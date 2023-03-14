@@ -6,6 +6,7 @@ import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.s
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { ERC20Burnable } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
+import { IDexToken } from "../interfaces/IDexToken.sol";
 
 contract FirstInFirstOut {
     using SafeERC20 for IERC20;
@@ -25,6 +26,7 @@ contract FirstInFirstOut {
     // Takers sell accounting and get underlying immediately
     IERC20 public immutable accounting;
     IERC20 public immutable underlying;
+    IDexToken public dexToken;
 
     // the accounting token decimals (stored to save gas);
     uint256 internal immutable _priceResolution;
@@ -48,10 +50,11 @@ contract FirstInFirstOut {
     error NullAmount();
     error WrongIndex();
 
-    constructor(IERC20 _underlying, IERC20Metadata _accounting) {
+    constructor(IERC20 _underlying, IERC20Metadata _accounting, address _dexToken) {
         accounting = _accounting;
         underlying = _underlying;
         _priceResolution = 10**_accounting.decimals();
+        dexToken = IDexToken(_dexToken);
     }
 
     // Example WETH / USDC, maker USDC, taker WETH
@@ -90,6 +93,7 @@ contract FirstInFirstOut {
         orders[price][toDelete.previous].next = toDelete.next;
         orders[price][toDelete.next].previous = toDelete.previous;
 
+        if (toDelete.staked > 0) dexToken.burn(toDelete.staked);
         delete orders[price][index];
         emit OrderCancelled(toDelete.offerer, index, price, toDelete.underlyingAmount);
     }
@@ -99,6 +103,7 @@ contract FirstInFirstOut {
         if (amount == 0 || price == 0) revert NullAmount();
 
         underlying.safeTransferFrom(msg.sender, address(this), amount);
+        if (staked > 0) dexToken.transferFrom(msg.sender, address(this), staked);
         _addNode(price, amount, staked, msg.sender);
 
         emit OrderCreated(msg.sender, id[price], amount, price);

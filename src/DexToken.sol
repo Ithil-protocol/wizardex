@@ -3,8 +3,9 @@ pragma solidity =0.8.17;
 
 import { IERC20, ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import { IDexToken } from "../interfaces/IDexToken.sol";
 
-contract DexToken is ERC20 {
+contract DexToken is ERC20, IDexToken {
     // TODO: add events
 
     uint256 price;
@@ -54,11 +55,11 @@ contract DexToken is ERC20 {
     }
 
     // The token must be burnable
-    function burn(uint256 amount) public {
+    function burn(uint256 amount) public override {
         _burn(msg.sender, amount);
     }
 
-    function buy(uint256 amount, address recipient) public {
+    function buy(uint256 amount, address recipient) public override returns (uint256) {
         require(amount > 0, "Zero amount");
         // gasSavings
         uint256 totalSupply = totalSupply();
@@ -70,8 +71,10 @@ contract DexToken is ERC20 {
             discountedPrice = (increasedPrice * halfTime - 1) / (block.timestamp - latest + halfTime) + 1;
         } else discountedPrice = price;
         // tokens in, thus we round up
-        paymentToken.transferFrom(msg.sender, treasury, (amount * discountedPrice - 1) / priceResolution + 1);
+        uint256 toPay = (amount * discountedPrice - 1) / priceResolution + 1;
+        paymentToken.transferFrom(msg.sender, treasury, toPay);
         _mint(recipient, amount);
         price = discountedPrice;
+        return toPay;
     }
 }
