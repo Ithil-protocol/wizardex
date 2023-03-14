@@ -5,17 +5,17 @@ import { IERC20, IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/exte
 import { ERC20Burnable } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { Test } from "forge-std/Test.sol";
-import { FirstInFirstOut } from "../src/FirstInFirstOut.sol";
-import { DexToken } from "../src/DexToken.sol";
+import { Factory } from "../src/Factory.sol";
+import { Pool } from "../src/Pool.sol";
+import { Token } from "../src/Token.sol";
 
-import { console2 } from "forge-std/console2.sol";
-
-contract FirstInFirstOutTest is Test {
-    FirstInFirstOut internal immutable swapper;
+contract PoolTest is Test {
+    Factory internal immutable factory;
+    Pool internal immutable swapper;
 
     IERC20Metadata internal constant usdc = IERC20Metadata(0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8);
     IERC20Metadata internal constant weth = IERC20Metadata(0x82aF49447D8a07e3bd95BD0d56f35241523fBab1);
-    DexToken internal immutable dexToken;
+    Token internal immutable dexToken;
     uint256 internal immutable priceResolution;
 
     address internal constant usdcWhale = 0x8b8149Dd385955DC1cE77a4bE7700CCD6a212e65; // this will be the maker
@@ -27,8 +27,10 @@ contract FirstInFirstOutTest is Test {
     constructor() {
         uint256 forkId = vm.createFork(vm.envString(rpcUrl), blockNumber);
         vm.selectFork(forkId);
-        dexToken = new DexToken(1e18, 1000);
-        swapper = new FirstInFirstOut(usdc, weth, dexToken);
+        dexToken = new Token("token", "TKN", 1e18, 1000);
+        factory = new Factory();
+        factory.setToken(address(dexToken));
+        swapper = Pool(factory.createPool(address(usdc), address(weth)));
         priceResolution = 10**weth.decimals();
     }
 
@@ -85,7 +87,7 @@ contract FirstInFirstOutTest is Test {
         (amountMade, index) = testCreateOrder(amountMade, price);
 
         vm.assume(amountTaken < usdc.totalSupply());
-        (uint256 prevAcc, uint256 prevUnd) = swapper.previewTake(amountTaken, price);
+        (, uint256 prevUnd) = swapper.previewTake(amountTaken, price);
         uint256 underlyingTaken;
         uint256 accountingTransfered;
         if (swapper.convertToAccounting(prevUnd, price) > weth.balanceOf(wethWhale)) {
