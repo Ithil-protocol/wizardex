@@ -6,10 +6,11 @@ import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.s
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { ERC20Burnable } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
-import { DexToken } from "./DexToken.sol";
+import { Token } from "./Token.sol";
 
-contract FirstInFirstOut {
-    using SafeERC20 for IERC20;
+contract Pool {
+    using SafeERC20 for ERC20;
+    using SafeERC20 for Token;
     using Math for uint256;
 
     // We model makers as a circular doubly linked list with zero as first and last element
@@ -24,13 +25,13 @@ contract FirstInFirstOut {
 
     // Makers provide underlying and get accounting after match
     // Takers sell accounting and get underlying immediately
-    IERC20 public immutable accounting;
-    IERC20 public immutable underlying;
-    DexToken public dexToken;
+    ERC20 public immutable accounting;
+    ERC20 public immutable underlying;
 
     // the accounting token decimals (stored to save gas);
     uint256 internal immutable _priceResolution;
 
+    Token public dexToken;
     // id of the order to access its data, by price
     mapping(uint256 => uint256) public id;
     // orders[price][id]
@@ -48,13 +49,14 @@ contract FirstInFirstOut {
 
     error RestrictedToOwner();
     error NullAmount();
-    error WrongIndex(uint256);
+    error WrongIndex();
 
-    constructor(IERC20 _underlying, IERC20Metadata _accounting, DexToken _dexToken) {
-        accounting = _accounting;
-        underlying = _underlying;
-        _priceResolution = 10**_accounting.decimals();
-        dexToken = _dexToken;
+    constructor(address _underlying, address _accounting, address _dexToken) {
+        accounting = ERC20(_accounting);
+        _priceResolution = 10**accounting.decimals();
+
+        underlying = ERC20(_underlying);
+        dexToken = Token(_dexToken);
     }
 
     // Example WETH / USDC, maker USDC, taker WETH
@@ -70,14 +72,16 @@ contract FirstInFirstOut {
         return underlyingAmount.mulDiv(_priceResolution, price, Math.Rounding.Up);
     }
 
-    function getInsertionIndex(uint256 price, uint256 staked) public view returns (uint256) {
+    function getInsertionIndex(uint256 price, uint256 staked) external view returns (uint256) {
         uint256 previous = 0;
         uint256 next = orders[price][0].next;
+
         // Get the latest position such that staked <= orders[price][previous].staked
         while (staked <= orders[price][next].staked && next != 0) {
             previous = next;
             next = orders[price][next].next;
         }
+
         return previous;
     }
 
@@ -89,17 +93,17 @@ contract FirstInFirstOut {
         // Case previous 0
         if (previous == 0) {
             // In this case, either next is also zero (first order) or we enforce next has strictly less stake
-            if (next != 0 && orders[price][next].staked >= staked) revert WrongIndex(0);
+            if (next != 0 && orders[price][next].staked >= staked) revert WrongIndex();
         } else {
             // If previous is not zero, it must be initialized
-            if (orders[price][previous].offerer == address(0)) revert WrongIndex(1);
+            if (orders[price][previous].offerer == address(0)) revert WrongIndex();
             // If next is zero, we just enforce the previous staked is larger or equal than this
             if (next == 0) {
-                if (orders[price][previous].staked < staked) revert WrongIndex(2);
+                if (orders[price][previous].staked < staked) revert WrongIndex();
             } else {
                 // If next is not zero, we are in the middle of the chain and we enforce both sides
                 if (orders[price][previous].staked < staked || orders[price][next].staked >= staked)
-                    revert WrongIndex(3);
+                    revert WrongIndex();
             }
         }
 
@@ -118,34 +122,33 @@ contract FirstInFirstOut {
 
         if (toDelete.staked > 0 && burn) dexToken.burn(toDelete.staked);
         delete orders[price][index];
-        emit OrderCancelled(toDelete.offerer, index, price, toDelete.underlyingAmount);
     }
 
     // Add a node to the list
-    function createOrder(uint256 amount, uint256 staked, uint256 price, uint256 previous) public {
+    function createOrder(uint256 amount, uint256 staked, uint256 price, uint256 previous) external {
         if (amount == 0 || price == 0) revert NullAmount();
 
         underlying.safeTransferFrom(msg.sender, address(this), amount);
-        if (staked > 0) dexToken.transferFrom(msg.sender, address(this), staked);
+        if (staked > 0) dexToken.safeTransferFrom(msg.sender, address(this), staked);
         _addNode(price, amount, staked, msg.sender, previous);
 
         emit OrderCreated(msg.sender, id[price], amount, price);
     }
 
-    function cancelOrder(uint256 index, uint256 price) public returns (uint256) {
+    function cancelOrder(uint256 index, uint256 price) external {
         Order memory order = orders[price][index];
         if (order.offerer != msg.sender) revert RestrictedToOwner();
 
         _deleteNode(price, index, false);
 
-        dexToken.transfer(msg.sender, order.staked);
+        dexToken.safeTransfer(msg.sender, order.staked);
         underlying.safeTransfer(msg.sender, order.underlyingAmount);
 
-        return order.underlyingAmount;
+        emit OrderCancelled(order.offerer, index, price, order.underlyingAmount);
     }
 
     // amount is always of underlying currency
-    function fulfillOrder(uint256 amount, uint256 price, address receiver) public returns (uint256, uint256) {
+    function fulfillOrder(uint256 amount, uint256 price, address receiver) external returns (uint256, uint256) {
         uint256 cursor = orders[price][0].next;
         Order memory order = orders[price][cursor];
 
@@ -176,13 +179,12 @@ contract FirstInFirstOut {
         underlying.safeTransfer(receiver, initialAmount - amount);
 
         emit OrderFulfilled(order.offerer, msg.sender, accountingToTransfer, initialAmount - amount, price);
-        // TODO calculate actual settlement price
 
         return (accountingToTransfer, initialAmount - amount);
     }
 
     // View function to calculate how much accounting the taker needs to take amount
-    function previewTake(uint256 amount, uint256 price) public view returns (uint256, uint256) {
+    function previewTake(uint256 amount, uint256 price) external view returns (uint256, uint256) {
         uint256 cursor = orders[price][0].next;
         Order memory order = orders[price][cursor];
 
@@ -207,7 +209,7 @@ contract FirstInFirstOut {
     }
 
     // View function to calculate how much accounting and underlying a redeem would return
-    function previewRedeem(uint256 index, uint256 price) public view returns (uint256) {
+    function previewRedeem(uint256 index, uint256 price) external view returns (uint256) {
         return orders[price][index].underlyingAmount;
     }
 }
