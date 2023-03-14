@@ -27,8 +27,8 @@ contract FirstInFirstOutTest is Test {
     constructor() {
         uint256 forkId = vm.createFork(vm.envString(rpcUrl), blockNumber);
         vm.selectFork(forkId);
-        dexToken = new DexToken(1e18, usdc, address(this), 1000);
-        swapper = new FirstInFirstOut(usdc, weth, address(dexToken));
+        dexToken = new DexToken(1e18, 1000);
+        swapper = new FirstInFirstOut(usdc, weth, dexToken);
         priceResolution = 10**weth.decimals();
     }
 

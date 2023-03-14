@@ -6,7 +6,7 @@ import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.s
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { ERC20Burnable } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
-import { IDexToken } from "../interfaces/IDexToken.sol";
+import { DexToken } from "./DexToken.sol";
 
 contract FirstInFirstOut {
     using SafeERC20 for IERC20;
@@ -26,7 +26,7 @@ contract FirstInFirstOut {
     // Takers sell accounting and get underlying immediately
     IERC20 public immutable accounting;
     IERC20 public immutable underlying;
-    IDexToken public dexToken;
+    DexToken public dexToken;
 
     // the accounting token decimals (stored to save gas);
     uint256 internal immutable _priceResolution;
@@ -50,11 +50,11 @@ contract FirstInFirstOut {
     error NullAmount();
     error WrongIndex();
 
-    constructor(IERC20 _underlying, IERC20Metadata _accounting, address _dexToken) {
+    constructor(IERC20 _underlying, IERC20Metadata _accounting, DexToken _dexToken) {
         accounting = _accounting;
         underlying = _underlying;
         _priceResolution = 10**_accounting.decimals();
-        dexToken = IDexToken(_dexToken);
+        dexToken = _dexToken;
     }
 
     // Example WETH / USDC, maker USDC, taker WETH
@@ -87,13 +87,13 @@ contract FirstInFirstOut {
         orders[price][next].previous = id[price];
     }
 
-    function _deleteNode(uint256 price, uint256 index) internal {
+    function _deleteNode(uint256 price, uint256 index, bool burn) internal {
         Order memory toDelete = orders[price][index];
 
         orders[price][toDelete.previous].next = toDelete.next;
         orders[price][toDelete.next].previous = toDelete.previous;
 
-        if (toDelete.staked > 0) dexToken.burn(toDelete.staked);
+        if (toDelete.staked > 0 && burn) dexToken.burn(toDelete.staked);
         delete orders[price][index];
         emit OrderCancelled(toDelete.offerer, index, price, toDelete.underlyingAmount);
     }
@@ -113,8 +113,9 @@ contract FirstInFirstOut {
         Order memory order = orders[price][index];
         if (order.offerer != msg.sender) revert RestrictedToOwner();
 
-        _deleteNode(price, index);
+        _deleteNode(price, index, false);
 
+        dexToken.transfer(msg.sender, order.staked);
         underlying.safeTransfer(msg.sender, order.underlyingAmount);
 
         return order.underlyingAmount;
@@ -132,7 +133,7 @@ contract FirstInFirstOut {
             uint256 toTransfer = convertToAccounting(order.underlyingAmount, price);
             accounting.safeTransferFrom(msg.sender, order.offerer, toTransfer);
             accountingToTransfer += toTransfer;
-            _deleteNode(price, cursor);
+            _deleteNode(price, cursor, true);
             amount -= order.underlyingAmount;
             cursor = order.next;
             // in case the next is zero, we reached the end of all orders
