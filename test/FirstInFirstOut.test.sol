@@ -50,8 +50,9 @@ contract FirstInFirstOutTest is Test {
         amount = amount % usdc.balanceOf(usdcWhale);
         if (amount == 0) amount++;
 
+        uint256 previous = swapper.getInsertionIndex(price, 0);
         vm.prank(usdcWhale);
-        swapper.createOrder(amount, 0, price);
+        swapper.createOrder(amount, 0, price, previous);
         assertEq(swapper.id(price), initialLastIndex + 1);
 
         if (initialLastIndex > 0) {

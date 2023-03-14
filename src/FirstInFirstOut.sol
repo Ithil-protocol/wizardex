@@ -48,7 +48,7 @@ contract FirstInFirstOut {
 
     error RestrictedToOwner();
     error NullAmount();
-    error WrongIndex();
+    error WrongIndex(uint256);
 
     constructor(IERC20 _underlying, IERC20Metadata _accounting, DexToken _dexToken) {
         accounting = _accounting;
@@ -70,16 +70,39 @@ contract FirstInFirstOut {
         return underlyingAmount.mulDiv(_priceResolution, price, Math.Rounding.Up);
     }
 
-    function _addNode(uint256 price, uint256 amount, uint256 staked, address maker) internal {
+    function getInsertionIndex(uint256 price, uint256 staked) public view returns (uint256) {
+        uint256 previous = 0;
+        uint256 next = orders[price][0].next;
+        // Get the latest position such that staked <= orders[price][previous].staked
+        while (staked <= orders[price][next].staked && next != 0) {
+            previous = next;
+            next = orders[price][next].next;
+        }
+        return previous;
+    }
+
+    function _addNode(uint256 price, uint256 amount, uint256 staked, address maker, uint256 previous) internal {
         // The "next" index of the last order is 0
         id[price]++;
-        uint256 previous = orders[price][0].previous;
-        uint256 next = 0;
-        // Get the latest position such that staked <= orders[price][previous].staked
-        while (staked > orders[price][previous].staked && previous != 0) {
-            next = orders[price][previous].next;
-            previous = orders[price][previous].previous;
+        uint256 next = orders[price][previous].next;
+
+        // Case previous 0
+        if (previous == 0) {
+            // In this case, either next is also zero (first order) or we enforce next has strictly less stake
+            if (next != 0 && orders[price][next].staked >= staked) revert WrongIndex(0);
+        } else {
+            // If previous is not zero, it must be initialized
+            if (orders[price][previous].offerer == address(0)) revert WrongIndex(1);
+            // If next is zero, we just enforce the previous staked is larger or equal than this
+            if (next == 0) {
+                if (orders[price][previous].staked < staked) revert WrongIndex(2);
+            } else {
+                // If next is not zero, we are in the middle of the chain and we enforce both sides
+                if (orders[price][previous].staked < staked || orders[price][next].staked >= staked)
+                    revert WrongIndex(3);
+            }
         }
+
         orders[price][id[price]] = Order(maker, amount, staked, previous, next);
         // The "next" index of the previous node is now id[price] (already bumped by 1)
         orders[price][previous].next = id[price];
@@ -99,12 +122,12 @@ contract FirstInFirstOut {
     }
 
     // Add a node to the list
-    function createOrder(uint256 amount, uint256 staked, uint256 price) public {
+    function createOrder(uint256 amount, uint256 staked, uint256 price, uint256 previous) public {
         if (amount == 0 || price == 0) revert NullAmount();
 
         underlying.safeTransferFrom(msg.sender, address(this), amount);
         if (staked > 0) dexToken.transferFrom(msg.sender, address(this), staked);
-        _addNode(price, amount, staked, msg.sender);
+        _addNode(price, amount, staked, msg.sender, previous);
 
         emit OrderCreated(msg.sender, id[price], amount, price);
     }
