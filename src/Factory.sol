@@ -25,7 +25,6 @@ contract Factory is Ownable {
     }
 
     function createPool(address underlying, address accounting, uint16 tickSpacing) external returns (address) {
-        assert(token != address(0));
         assert(tickSupported[tickSpacing]);
 
         if (pools[underlying][accounting][tickSpacing] == address(0)) {
