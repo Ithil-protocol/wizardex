@@ -37,7 +37,7 @@ contract PoolTest is Test {
         weth.approve(address(swapper), type(uint256).max);
     }
 
-    function testCreateOrder(uint256 amount, uint256 price) public returns (uint256, uint256) {
+    function testCreateOrder(uint256 amount, uint256 price, uint256 stake) public returns (uint256, uint256) {
         vm.assume(price > 0 && price < type(uint256).max / 1e18);
         uint256 initialLastIndex = swapper.id(price);
         (address lastOwner, , uint256 lastAmount, , uint256 lastPrevious, uint256 lastNext) = swapper.orders(
@@ -49,7 +49,7 @@ contract PoolTest is Test {
         if (amount == 0) amount++;
 
         vm.prank(usdcWhale);
-        swapper.createOrder(amount, price, usdcWhale);
+        swapper.createOrder{ value: stake}(amount, price, usdcWhale);
         assertEq(swapper.id(price), initialLastIndex + 1);
 
         if (initialLastIndex > 0) {
@@ -80,7 +80,7 @@ contract PoolTest is Test {
         returns (uint256, uint256, uint256, uint256)
     {
         uint256 index;
-        (amountMade, index) = testCreateOrder(amountMade, price);
+        (amountMade, index) = testCreateOrder(amountMade, price, 0);
 
         vm.assume(amountTaken < usdc.totalSupply());
         (uint256 accountingToPay, uint256 prevUnd) = swapper.previewTake(amountTaken);
@@ -143,9 +143,9 @@ contract PoolTest is Test {
 
         uint256 index1;
         uint256 index2;
-        (made1, index1) = testCreateOrder(made1, price);
+        (made1, index1) = testCreateOrder(made1, price, 0);
         made2 = usdc.balanceOf(usdcWhale) == 0 ? 0 : made2 % usdc.balanceOf(usdcWhale);
-        (made2, index2) = testCreateOrder(made2, price);
+        (made2, index2) = testCreateOrder(made2, price, 0);
 
         // Taker can afford to take
         uint256 maxTaken = swapper.convertToUnderlying(weth.balanceOf(wethWhale), price);

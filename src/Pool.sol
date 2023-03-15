@@ -147,8 +147,11 @@ contract Pool {
         _deleteNode(price, index);
 
         underlying.safeTransfer(msg.sender, order.underlyingAmount);
-        (bool success, ) = msg.sender.call{ value: order.staked }("");
-        assert(success);
+
+        if(order.staked > 0) {
+            (bool success, ) = msg.sender.call{ value: order.staked }("");
+            assert(success);
+        }
 
         emit OrderCancelled(order.offerer, index, price, order.underlyingAmount);
     }
