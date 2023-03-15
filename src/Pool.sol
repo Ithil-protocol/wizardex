@@ -3,8 +3,6 @@ pragma solidity =0.8.17;
 
 import { IERC20, ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import { ERC20Burnable } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { Token } from "./Token.sol";
 
@@ -23,13 +21,25 @@ contract Pool {
         uint256 next;
     }
 
+    // Mapping from higher to lower
+    // By convention, priceLevels[0] is the highest bid;
+    mapping(uint256 => uint256) public priceLevels;
+
     // Makers provide underlying and get accounting after match
     // Takers sell accounting and get underlying immediately
     ERC20 public immutable accounting;
     ERC20 public immutable underlying;
 
     // the accounting token decimals (stored to save gas);
-    uint256 internal immutable _priceResolution;
+    uint256 public immutable priceResolution;
+
+    // The minimum spacing percentage between prices, 1e4 corresponding to 100%
+    // lower values allow for a more fluid price but frontrunning is exacerbated and staking less useful
+    // higher values make token staking useful and frontrunning exploit less feasible
+    // but makers must choose between more stringent bids
+    // lower values are indicated for stable pairs
+    // higher vlaues are indicated for more volatile pairs
+    uint16 public immutable tick;
 
     Token public dexToken;
     // id of the order to access its data, by price
@@ -48,31 +58,54 @@ contract Pool {
     event OrderCancelled(address indexed offerer, uint256 index, uint256 price, uint256 underlyingToTransfer);
 
     error RestrictedToOwner();
+    error IncorrectTickSpacing();
     error NullAmount();
     error WrongIndex();
 
-    constructor(address _underlying, address _accounting, address _dexToken) {
+    constructor(address _underlying, address _accounting, address _dexToken, uint16 _tick) {
         accounting = ERC20(_accounting);
-        _priceResolution = 10**accounting.decimals();
+        priceResolution = 10**accounting.decimals();
 
         underlying = ERC20(_underlying);
         dexToken = Token(_dexToken);
+        tick = _tick;
     }
 
     // Example WETH / USDC, maker USDC, taker WETH
-    // _priceResolution = 1e18 (decimals of WETH)
+    // priceResolution = 1e18 (decimals of WETH)
     // Price = 1753.54 WETH/USDC -> 1753540000 (it has USDC decimals)
     // Sell 2.3486 WETH -> accountingAmount = 2348600000000000000
     // underlyingOut = 2348600000000000000 * 1753540000 / 1e18 = 4118364044 -> 4,118.364044 USDC
     function convertToUnderlying(uint256 accountingAmount, uint256 price) public view returns (uint256) {
-        return accountingAmount.mulDiv(price, _priceResolution, Math.Rounding.Down);
+        return accountingAmount.mulDiv(price, priceResolution, Math.Rounding.Down);
     }
 
     function convertToAccounting(uint256 underlyingAmount, uint256 price) public view returns (uint256) {
-        return underlyingAmount.mulDiv(_priceResolution, price, Math.Rounding.Up);
+        return underlyingAmount.mulDiv(priceResolution, price, Math.Rounding.Up);
     }
 
-    function getInsertionIndex(uint256 price, uint256 staked) external view returns (uint256) {
+    function _checkSpacing(uint256 lower, uint256 higher) internal view returns (bool) {
+        return lower == 0 || higher >= lower.mulDiv(tick + 10000, 10000, Math.Rounding.Up);
+    }
+
+    function _addNode(uint256 price, uint256 amount, uint256 staked, address maker) internal {
+        uint256 higherPrice = 0;
+        while (priceLevels[higherPrice] > price) {
+            higherPrice = priceLevels[higherPrice];
+        }
+
+        if (priceLevels[higherPrice] < price) {
+            if (
+                !_checkSpacing(priceLevels[higherPrice], price) ||
+                (!_checkSpacing(price, higherPrice) && higherPrice != 0)
+            ) revert IncorrectTickSpacing();
+
+            priceLevels[price] = priceLevels[higherPrice];
+            priceLevels[higherPrice] = price;
+        }
+
+        // The "next" index of the last order is 0
+        id[price]++;
         uint256 previous = 0;
         uint256 next = orders[price][0].next;
 
@@ -80,31 +113,6 @@ contract Pool {
         while (staked <= orders[price][next].staked && next != 0) {
             previous = next;
             next = orders[price][next].next;
-        }
-
-        return previous;
-    }
-
-    function _addNode(uint256 price, uint256 amount, uint256 staked, address maker, uint256 previous) internal {
-        // The "next" index of the last order is 0
-        id[price]++;
-        uint256 next = orders[price][previous].next;
-
-        // Case previous 0
-        if (previous == 0) {
-            // In this case, either next is also zero (first order) or we enforce next has strictly less stake
-            if (next != 0 && orders[price][next].staked >= staked) revert WrongIndex();
-        } else {
-            // If previous is not zero, it must be initialized
-            if (orders[price][previous].offerer == address(0)) revert WrongIndex();
-            // If next is zero, we just enforce the previous staked is larger or equal than this
-            if (next == 0) {
-                if (orders[price][previous].staked < staked) revert WrongIndex();
-            } else {
-                // If next is not zero, we are in the middle of the chain and we enforce both sides
-                if (orders[price][previous].staked < staked || orders[price][next].staked >= staked)
-                    revert WrongIndex();
-            }
         }
 
         orders[price][id[price]] = Order(maker, amount, staked, previous, next);
@@ -125,12 +133,12 @@ contract Pool {
     }
 
     // Add a node to the list
-    function createOrder(uint256 amount, uint256 staked, uint256 price, uint256 previous) external {
+    function createOrder(uint256 amount, uint256 staked, uint256 price) external {
         if (amount == 0 || price == 0) revert NullAmount();
 
         underlying.safeTransferFrom(msg.sender, address(this), amount);
         if (staked > 0) dexToken.safeTransferFrom(msg.sender, address(this), staked);
-        _addNode(price, amount, staked, msg.sender, previous);
+        _addNode(price, amount, staked, msg.sender);
 
         emit OrderCreated(msg.sender, id[price], amount, price);
     }
@@ -148,7 +156,24 @@ contract Pool {
     }
 
     // amount is always of underlying currency
-    function fulfillOrder(uint256 amount, uint256 price, address receiver) external returns (uint256, uint256) {
+    function fulfillOrder(uint256 amount, address receiver) external returns (uint256, uint256) {
+        uint256 accountingToPay = 0;
+        uint256 initialAmount = amount;
+        while (amount > 0 && priceLevels[0] != 0) {
+            (uint256 payStep, uint256 underlyingReceived) = fulfillOrderByPrice(amount, priceLevels[0], receiver);
+            // underlyingPaid <= amount
+            unchecked {
+                amount -= underlyingReceived;
+            }
+            accountingToPay += payStep;
+            if (amount > 0) priceLevels[0] = priceLevels[priceLevels[0]];
+        }
+
+        return (accountingToPay, initialAmount - amount);
+    }
+
+    // amount is always of underlying currency
+    function fulfillOrderByPrice(uint256 amount, uint256 price, address receiver) internal returns (uint256, uint256) {
         uint256 cursor = orders[price][0].next;
         Order memory order = orders[price][cursor];
 
@@ -183,8 +208,26 @@ contract Pool {
         return (accountingToTransfer, initialAmount - amount);
     }
 
+    // amount is always of underlying currency
+    function previewTake(uint256 amount) external view returns (uint256, uint256) {
+        uint256 accountingToPay = 0;
+        uint256 initialAmount = amount;
+        uint256 price = priceLevels[0];
+        while (amount > 0 && price != 0) {
+            (uint256 payStep, uint256 underlyingReceived) = previewTakeByPrice(amount, priceLevels[0]);
+            // underlyingPaid <= amount
+            unchecked {
+                amount -= underlyingReceived;
+            }
+            accountingToPay += payStep;
+            price = priceLevels[price];
+        }
+
+        return (accountingToPay, initialAmount - amount);
+    }
+
     // View function to calculate how much accounting the taker needs to take amount
-    function previewTake(uint256 amount, uint256 price) external view returns (uint256, uint256) {
+    function previewTakeByPrice(uint256 amount, uint256 price) internal view returns (uint256, uint256) {
         uint256 cursor = orders[price][0].next;
         Order memory order = orders[price][cursor];
 
@@ -205,6 +248,7 @@ contract Pool {
             accountingToTransfer += toTransfer;
             amount = 0;
         }
+
         return (accountingToTransfer, initialAmount - amount);
     }
 

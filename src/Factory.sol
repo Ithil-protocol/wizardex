@@ -1,29 +1,45 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity =0.8.17;
 
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { Pool } from "./Pool.sol";
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract Factory is Ownable {
-    address public token;
+    address public immutable token;
     // underlying => accounting => pool address
-    mapping(address => mapping(address => address)) public pools;
+    mapping(address => mapping(address => mapping(uint256 => address))) public pools;
 
-    event NewPool(address indexed underlying, address indexed accounting);
+    mapping(uint16 => bool) public tickSupported;
 
-    function setToken(address _token) external onlyOwner {
+    event NewPool(address indexed underlying, address indexed accounting, uint256 indexed tickSpacing);
+
+    constructor(address _token) {
         token = _token;
+        tickSupported[1] = true;
+        tickSupported[5] = true;
+        tickSupported[10] = true;
     }
 
-    function createPool(address underlying, address accounting) external returns (address) {
-        assert(token != address(0));
+    function supportTick(uint16 tick) external onlyOwner {
+        tickSupported[tick] = true;
+    }
 
-        if (pools[underlying][accounting] == address(0)) {
-            pools[underlying][accounting] = address(new Pool(underlying, accounting, token));
+    function createPool(address underlying, address accounting, uint16 tickSpacing) external returns (address) {
+        assert(tickSupported[tickSpacing]);
 
-            emit NewPool(underlying, accounting);
+        if (pools[underlying][accounting][tickSpacing] == address(0)) {
+            pools[underlying][accounting][tickSpacing] = address(
+                new Pool{ salt: keccak256(abi.encode(underlying, accounting, tickSpacing)) }(
+                    underlying,
+                    accounting,
+                    token,
+                    tickSpacing
+                )
+            );
+
+            emit NewPool(underlying, accounting, tickSpacing);
         }
 
-        return pools[underlying][accounting];
+        return pools[underlying][accounting][tickSpacing];
     }
 }
