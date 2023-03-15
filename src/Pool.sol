@@ -183,14 +183,14 @@ contract Pool {
             accounting.safeTransferFrom(msg.sender, order.recipient, toTransfer);
             accountingToTransfer += toTransfer;
             _deleteNode(price, cursor);
+            amount -= order.underlyingAmount;
+            cursor = order.next;
 
             if (order.staked > 0) {
                 (bool success, ) = factory.call{ value: order.staked }("");
                 assert(success);
             }
 
-            amount -= order.underlyingAmount;
-            cursor = order.next;
             // in case the next is zero, we reached the end of all orders
             if (cursor == 0) break;
             order = orders[price][cursor];
