@@ -43,7 +43,7 @@ contract PoolTest is Test {
     function testCreateOrder(uint256 amount, uint256 price) public returns (uint256, uint256) {
         vm.assume(price > 0 && price < type(uint256).max / 1e18);
         uint256 initialLastIndex = swapper.id(price);
-        (address lastOwner, uint256 lastAmount, , uint256 lastPrevious, uint256 lastNext) = swapper.orders(
+        (address lastOwner, , uint256 lastAmount, , uint256 lastPrevious, uint256 lastNext) = swapper.orders(
             price,
             initialLastIndex
         );
@@ -52,12 +52,13 @@ contract PoolTest is Test {
         if (amount == 0) amount++;
 
         vm.prank(usdcWhale);
-        swapper.createOrder(amount, 0, price);
+        swapper.createOrder(amount, 0, price, usdcWhale);
         assertEq(swapper.id(price), initialLastIndex + 1);
 
         if (initialLastIndex > 0) {
             (
                 address transformedOwner,
+                ,
                 uint256 transformedAmount,
                 ,
                 uint256 transformedPrevious,
@@ -68,7 +69,7 @@ contract PoolTest is Test {
             assertEq(transformedPrevious, lastPrevious);
             assertEq(transformedNext, initialLastIndex + 1);
         }
-        (lastOwner, lastAmount, , lastPrevious, lastNext) = swapper.orders(price, initialLastIndex + 1);
+        (lastOwner, , lastAmount, , lastPrevious, lastNext) = swapper.orders(price, initialLastIndex + 1);
 
         assertEq(lastOwner, usdcWhale);
         assertEq(lastAmount, amount);

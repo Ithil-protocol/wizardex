@@ -15,6 +15,7 @@ contract Pool {
     // This facilitates insertion and deletion of orders making the process gas efficient
     struct Order {
         address offerer;
+        address recipient;
         uint256 underlyingAmount;
         uint256 staked;
         uint256 previous;
@@ -88,7 +89,7 @@ contract Pool {
         return lower == 0 || higher >= lower.mulDiv(tick + 10000, 10000, Math.Rounding.Up);
     }
 
-    function _addNode(uint256 price, uint256 amount, uint256 staked, address maker) internal {
+    function _addNode(uint256 price, uint256 amount, uint256 staked, address maker, address recipient) internal {
         uint256 higherPrice = 0;
         while (priceLevels[higherPrice] > price) {
             higherPrice = priceLevels[higherPrice];
@@ -115,7 +116,7 @@ contract Pool {
             next = orders[price][next].next;
         }
 
-        orders[price][id[price]] = Order(maker, amount, staked, previous, next);
+        orders[price][id[price]] = Order(maker, recipient, amount, staked, previous, next);
         // The "next" index of the previous node is now id[price] (already bumped by 1)
         orders[price][previous].next = id[price];
         // The "previous" index of the 0 node is now id[price]
@@ -133,12 +134,12 @@ contract Pool {
     }
 
     // Add a node to the list
-    function createOrder(uint256 amount, uint256 staked, uint256 price) external {
+    function createOrder(uint256 amount, uint256 staked, uint256 price, address recipient) external {
         if (amount == 0 || price == 0) revert NullAmount();
 
         underlying.safeTransferFrom(msg.sender, address(this), amount);
         if (staked > 0) dexToken.safeTransferFrom(msg.sender, address(this), staked);
-        _addNode(price, amount, staked, msg.sender);
+        _addNode(price, amount, staked, msg.sender, recipient);
 
         emit OrderCreated(msg.sender, id[price], amount, price);
     }
@@ -182,7 +183,7 @@ contract Pool {
 
         while (amount >= order.underlyingAmount) {
             uint256 toTransfer = convertToAccounting(order.underlyingAmount, price);
-            accounting.safeTransferFrom(msg.sender, order.offerer, toTransfer);
+            accounting.safeTransferFrom(msg.sender, order.recipient, toTransfer);
             accountingToTransfer += toTransfer;
             _deleteNode(price, cursor, true);
             amount -= order.underlyingAmount;
@@ -194,7 +195,7 @@ contract Pool {
 
         if (amount > 0 && cursor != 0) {
             uint256 toTransfer = convertToAccounting(amount, price);
-            accounting.safeTransferFrom(msg.sender, order.offerer, toTransfer);
+            accounting.safeTransferFrom(msg.sender, order.recipient, toTransfer);
             accountingToTransfer += toTransfer;
             orders[price][cursor].underlyingAmount -= amount;
 
