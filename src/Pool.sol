@@ -148,7 +148,7 @@ contract Pool {
 
         underlying.safeTransfer(msg.sender, order.underlyingAmount);
 
-        if(order.staked > 0) {
+        if (order.staked > 0) {
             (bool success, ) = msg.sender.call{ value: order.staked }("");
             assert(success);
         }

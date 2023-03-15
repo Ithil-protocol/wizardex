@@ -50,7 +50,7 @@ contract PoolTest is Test {
 
         vm.startPrank(usdcWhale);
 
-        if(stake > 0) {
+        if (stake > 0) {
             vm.deal(usdcWhale, stake);
             swapper.createOrder{ value: stake }(amount, price, usdcWhale);
         } else {
@@ -58,7 +58,7 @@ contract PoolTest is Test {
         }
 
         vm.stopPrank();
-    
+
         assertEq(swapper.id(price), initialLastIndex + 1);
 
         if (initialLastIndex > 0) {
