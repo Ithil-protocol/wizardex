@@ -48,8 +48,17 @@ contract PoolTest is Test {
         amount = amount % usdc.balanceOf(usdcWhale);
         if (amount == 0) amount++;
 
-        vm.prank(usdcWhale);
-        swapper.createOrder{ value: stake}(amount, price, usdcWhale);
+        vm.startPrank(usdcWhale);
+
+        if(stake > 0) {
+            vm.deal(usdcWhale, stake);
+            swapper.createOrder{ value: stake }(amount, price, usdcWhale);
+        } else {
+            swapper.createOrder(amount, price, usdcWhale);
+        }
+
+        vm.stopPrank();
+    
         assertEq(swapper.id(price), initialLastIndex + 1);
 
         if (initialLastIndex > 0) {
