@@ -34,9 +34,6 @@ contract PoolTest is Test {
     }
 
     function setUp() public {
-        token0.mint(maker, type(uint256).max);
-        token1.mint(taker, type(uint256).max);
-
         vm.deal(maker, 1 ether);
         vm.deal(taker, 1 ether);
 
@@ -50,6 +47,8 @@ contract PoolTest is Test {
     function testCreateOrder(uint256 amount, uint256 price, uint256 stake) public returns (uint256, uint256) {
         vm.assume(amount > 0);
         price = bound(price, 1, type(uint256).max / 1e18);
+
+        token0.mint(maker, amount);
 
         uint256 initialLastIndex = swapper.id(price);
         (address lastOwner, , uint256 lastAmount, , uint256 lastPrevious, uint256 lastNext) = swapper.orders(
@@ -103,21 +102,17 @@ contract PoolTest is Test {
         uint256 index;
         (amountMade, index) = testCreateOrder(amountMade, price, stake);
 
-        vm.assume(amountTaken < token0.totalSupply());
         (uint256 accountingToPay, uint256 prevUnd) = swapper.previewTake(amountTaken);
         uint256 underlyingTaken;
         uint256 accountingTransfered;
-        if (accountingToPay > token1.balanceOf(taker)) {
-            vm.startPrank(taker);
-            vm.expectRevert(abi.encodePacked("ERC20: transfer amount exceeds balance"));
-            swapper.fulfillOrder(amountTaken, address(this));
-            vm.stopPrank();
-        } else {
-            vm.startPrank(taker);
-            (accountingTransfered, underlyingTaken) = swapper.fulfillOrder(amountTaken, address(this));
-            assertEq(underlyingTaken, prevUnd);
-            vm.stopPrank();
-        }
+
+        token1.mint(taker, accountingToPay);
+
+        vm.startPrank(taker);
+        (accountingTransfered, underlyingTaken) = swapper.fulfillOrder(amountTaken, address(this));
+        assertEq(underlyingTaken, prevUnd);
+        vm.stopPrank();
+
         return (amountMade, underlyingTaken, accountingTransfered, index);
     }
 
@@ -157,6 +152,8 @@ contract PoolTest is Test {
     }
 
     function testFirstInFirstOut(uint256 made1, uint256 made2, uint256 taken, uint256 price) public {
+        vm.assume(made1 > 0);
+        vm.assume(made2 > 0);
         // do not allow absurdely high prices that cause overflows
         /// vm.assume(price < type(uint256).max / token1.balanceOf(taker));
 
