@@ -33,13 +33,13 @@ contract Pool {
     // the accounting token decimals (stored to save gas);
     uint256 public immutable priceResolution;
 
-    // The minimum spacing percentage between prices, 1e18 corresponding to 100%
+    // The minimum spacing percentage between prices, 1e4 corresponding to 100%
     // lower values allow for a more fluid price but frontrunning is exacerbated and staking less useful
     // higher values make token staking useful and frontrunning exploit less feasible
     // but makers must choose between more stringent bids
     // lower values are indicated for stable pairs
     // higher vlaues are indicated for more volatile pairs
-    uint256 public immutable tick;
+    uint16 public immutable tick;
 
     Token public dexToken;
     // id of the order to access its data, by price
@@ -62,7 +62,7 @@ contract Pool {
     error NullAmount();
     error WrongIndex();
 
-    constructor(address _underlying, address _accounting, address _dexToken, uint256 _tick) {
+    constructor(address _underlying, address _accounting, address _dexToken, uint16 _tick) {
         accounting = ERC20(_accounting);
         priceResolution = 10**accounting.decimals();
 
@@ -85,7 +85,7 @@ contract Pool {
     }
 
     function _checkSpacing(uint256 lower, uint256 higher) internal view returns (bool) {
-        return lower == 0 || higher >= lower.mulDiv(tick + 1e18, 1e18, Math.Rounding.Up);
+        return lower == 0 || higher >= lower.mulDiv(tick + 10000, 10000, Math.Rounding.Up);
     }
 
     function _addNode(uint256 price, uint256 amount, uint256 staked, address maker) internal {
