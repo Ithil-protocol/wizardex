@@ -7,7 +7,6 @@ import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { Test } from "forge-std/Test.sol";
 import { Factory } from "../src/Factory.sol";
 import { Pool } from "../src/Pool.sol";
-import { Token } from "../src/Token.sol";
 
 contract PoolTest is Test {
     Factory internal immutable factory;
@@ -15,7 +14,6 @@ contract PoolTest is Test {
 
     IERC20Metadata internal constant usdc = IERC20Metadata(0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8);
     IERC20Metadata internal constant weth = IERC20Metadata(0x82aF49447D8a07e3bd95BD0d56f35241523fBab1);
-    Token internal immutable dexToken;
     uint256 internal immutable priceResolution;
 
     address internal constant usdcWhale = 0x8b8149Dd385955DC1cE77a4bE7700CCD6a212e65; // this will be the maker
@@ -27,8 +25,7 @@ contract PoolTest is Test {
     constructor() {
         uint256 forkId = vm.createFork(vm.envString(rpcUrl), blockNumber);
         vm.selectFork(forkId);
-        dexToken = new Token("token", "TKN", 1e18, 1000);
-        factory = new Factory(address(dexToken));
+        factory = new Factory();
         swapper = Pool(factory.createPool(address(usdc), address(weth), 1));
         priceResolution = 10**weth.decimals();
     }
@@ -52,7 +49,7 @@ contract PoolTest is Test {
         if (amount == 0) amount++;
 
         vm.prank(usdcWhale);
-        swapper.createOrder(amount, 0, price, usdcWhale);
+        swapper.createOrder(amount, price, usdcWhale);
         assertEq(swapper.id(price), initialLastIndex + 1);
 
         if (initialLastIndex > 0) {

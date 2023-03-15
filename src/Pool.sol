@@ -4,11 +4,9 @@ pragma solidity =0.8.17;
 import { IERC20, ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
-import { Token } from "./Token.sol";
 
 contract Pool {
     using SafeERC20 for ERC20;
-    using SafeERC20 for Token;
     using Math for uint256;
 
     // We model makers as a circular doubly linked list with zero as first and last element
@@ -21,6 +19,8 @@ contract Pool {
         uint256 previous;
         uint256 next;
     }
+
+    address public immutable factory;
 
     // Mapping from higher to lower
     // By convention, priceLevels[0] is the highest bid;
@@ -42,7 +42,6 @@ contract Pool {
     // higher vlaues are indicated for more volatile pairs
     uint16 public immutable tick;
 
-    Token public dexToken;
     // id of the order to access its data, by price
     mapping(uint256 => uint256) public id;
     // orders[price][id]
@@ -63,12 +62,11 @@ contract Pool {
     error NullAmount();
     error WrongIndex();
 
-    constructor(address _underlying, address _accounting, address _dexToken, uint16 _tick) {
+    constructor(address _underlying, address _accounting, uint16 _tick) {
+        factory = msg.sender;
         accounting = ERC20(_accounting);
         priceResolution = 10**accounting.decimals();
-
         underlying = ERC20(_underlying);
-        dexToken = Token(_dexToken);
         tick = _tick;
     }
 
@@ -123,23 +121,21 @@ contract Pool {
         orders[price][next].previous = id[price];
     }
 
-    function _deleteNode(uint256 price, uint256 index, bool burn) internal {
+    function _deleteNode(uint256 price, uint256 index) internal {
         Order memory toDelete = orders[price][index];
 
         orders[price][toDelete.previous].next = toDelete.next;
         orders[price][toDelete.next].previous = toDelete.previous;
 
-        if (toDelete.staked > 0 && burn) dexToken.burn(toDelete.staked);
         delete orders[price][index];
     }
 
     // Add a node to the list
-    function createOrder(uint256 amount, uint256 staked, uint256 price, address recipient) external {
+    function createOrder(uint256 amount, uint256 price, address recipient) external payable {
         if (amount == 0 || price == 0) revert NullAmount();
 
         underlying.safeTransferFrom(msg.sender, address(this), amount);
-        if (staked > 0) dexToken.safeTransferFrom(msg.sender, address(this), staked);
-        _addNode(price, amount, staked, msg.sender, recipient);
+        _addNode(price, amount, msg.value, msg.sender, recipient);
 
         emit OrderCreated(msg.sender, id[price], amount, price);
     }
@@ -148,10 +144,11 @@ contract Pool {
         Order memory order = orders[price][index];
         if (order.offerer != msg.sender) revert RestrictedToOwner();
 
-        _deleteNode(price, index, false);
+        _deleteNode(price, index);
 
-        dexToken.safeTransfer(msg.sender, order.staked);
         underlying.safeTransfer(msg.sender, order.underlyingAmount);
+        (bool success, ) = msg.sender.call{ value: order.staked }("");
+        assert(success);
 
         emit OrderCancelled(order.offerer, index, price, order.underlyingAmount);
     }
@@ -185,7 +182,13 @@ contract Pool {
             uint256 toTransfer = convertToAccounting(order.underlyingAmount, price);
             accounting.safeTransferFrom(msg.sender, order.recipient, toTransfer);
             accountingToTransfer += toTransfer;
-            _deleteNode(price, cursor, true);
+            _deleteNode(price, cursor);
+
+            if (order.staked > 0) {
+                (bool success, ) = factory.call{ value: order.staked }("");
+                assert(success);
+            }
+
             amount -= order.underlyingAmount;
             cursor = order.next;
             // in case the next is zero, we reached the end of all orders
