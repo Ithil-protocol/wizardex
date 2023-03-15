@@ -182,4 +182,6 @@ contract PoolTest is Test {
             assertEq(prevAcc2, made2 - (underlyingToTransfer - made1));
         }
     }
+
+    receive() external payable {}
 }
