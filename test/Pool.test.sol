@@ -2,62 +2,90 @@
 pragma solidity =0.8.17;
 
 import { IERC20, IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import { ERC20Burnable } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+import { ERC20PresetMinterPauser } from "@openzeppelin/contracts/token/ERC20/presets/ERC20PresetMinterPauser.sol";
 import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { Test } from "forge-std/Test.sol";
 import { Factory } from "../src/Factory.sol";
 import { Pool } from "../src/Pool.sol";
-import { Token } from "../src/Token.sol";
+
+import { console2 } from "forge-std/console2.sol";
+
+contract Wallet {
+    receive() external payable {}
+}
 
 contract PoolTest is Test {
     Factory internal immutable factory;
     Pool internal immutable swapper;
 
-    IERC20Metadata internal constant usdc = IERC20Metadata(0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8);
-    IERC20Metadata internal constant weth = IERC20Metadata(0x82aF49447D8a07e3bd95BD0d56f35241523fBab1);
-    Token internal immutable dexToken;
-    uint256 internal immutable priceResolution;
+    ERC20PresetMinterPauser internal immutable token0;
+    ERC20PresetMinterPauser internal immutable token1;
 
-    address internal constant usdcWhale = 0x8b8149Dd385955DC1cE77a4bE7700CCD6a212e65; // this will be the maker
-    address internal constant wethWhale = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1; // this will be the taker
+    address internal immutable maker;
+    address internal immutable taker;
 
-    string internal constant rpcUrl = "ARBITRUM_RPC_URL";
-    uint256 internal constant blockNumber = 66038570;
+    uint256 internal constant priceResolution = 1e18;
+    uint16 internal immutable tick;
+
+    uint256 internal immutable maximumPrice;
+    uint256 internal immutable maximumAmount;
 
     constructor() {
-        uint256 forkId = vm.createFork(vm.envString(rpcUrl), blockNumber);
-        vm.selectFork(forkId);
-        dexToken = new Token("token", "TKN", 1e18, 1000);
-        factory = new Factory(address(dexToken));
-        swapper = Pool(factory.createPool(address(usdc), address(weth), 1));
-        priceResolution = 10**weth.decimals();
+        token0 = new ERC20PresetMinterPauser("token0", "TKN0");
+        token1 = new ERC20PresetMinterPauser("token1", "TKN1");
+        factory = new Factory();
+        tick = 1;
+        swapper = Pool(factory.createPool(address(token0), address(token1), tick));
+        maker = address(new Wallet());
+        taker = address(new Wallet());
+        maximumPrice = type(uint256).max / (10000 + tick);
+        maximumAmount = type(uint256).max / priceResolution;
     }
 
     function setUp() public {
-        vm.prank(usdcWhale);
-        usdc.approve(address(swapper), type(uint256).max);
-        vm.prank(wethWhale);
-        weth.approve(address(swapper), type(uint256).max);
+        vm.deal(maker, 1 ether);
+        vm.deal(taker, 1 ether);
+
+        vm.prank(maker);
+        token0.approve(address(swapper), type(uint256).max);
+
+        vm.prank(taker);
+        token1.approve(address(swapper), type(uint256).max);
     }
 
-    function testCreateOrder(uint256 amount, uint256 price) public returns (uint256, uint256) {
-        vm.assume(price > 0 && price < type(uint256).max / 1e18);
+    function testCreateOrder(uint256 amount, uint256 price, uint256 stake) public returns (uint256, uint256, uint256) {
+        amount = amount % maximumAmount;
+        if (amount == 0) amount++;
+        price = price % maximumPrice;
+        if (price == 0) price++;
+
+        token0.mint(maker, amount);
+
         uint256 initialLastIndex = swapper.id(price);
-        (address lastOwner, uint256 lastAmount, , uint256 lastPrevious, uint256 lastNext) = swapper.orders(
+        (address lastOwner, , uint256 lastAmount, , uint256 lastPrevious, uint256 lastNext) = swapper.orders(
             price,
             initialLastIndex
         );
         assertEq(lastNext, 0);
-        amount = amount % usdc.balanceOf(usdcWhale);
-        if (amount == 0) amount++;
 
-        vm.prank(usdcWhale);
-        swapper.createOrder(amount, 0, price);
+        /*
+        amount = amount % token0.balanceOf(maker);
+        if (amount == 0) amount++;
+        */
+
+        vm.startPrank(maker);
+        if (stake > 0) {
+            vm.deal(maker, stake);
+        }
+        swapper.createOrder{ value: stake }(amount, price, maker);
+        vm.stopPrank();
+
         assertEq(swapper.id(price), initialLastIndex + 1);
 
         if (initialLastIndex > 0) {
             (
                 address transformedOwner,
+                ,
                 uint256 transformedAmount,
                 ,
                 uint256 transformedPrevious,
@@ -68,54 +96,51 @@ contract PoolTest is Test {
             assertEq(transformedPrevious, lastPrevious);
             assertEq(transformedNext, initialLastIndex + 1);
         }
-        (lastOwner, lastAmount, , lastPrevious, lastNext) = swapper.orders(price, initialLastIndex + 1);
+        (lastOwner, , lastAmount, , lastPrevious, lastNext) = swapper.orders(price, initialLastIndex + 1);
 
-        assertEq(lastOwner, usdcWhale);
+        assertEq(lastOwner, maker);
         assertEq(lastAmount, amount);
         assertEq(lastPrevious, initialLastIndex);
         assertEq(lastNext, 0);
-        return (amount, initialLastIndex + 1);
+
+        return (amount, price, initialLastIndex + 1);
     }
 
-    function testFulfillOrder(uint256 amountMade, uint256 amountTaken, uint256 price)
+    function testFulfillOrder(uint256 amountMade, uint256 amountTaken, uint256 price, uint256 stake)
         public
-        returns (uint256, uint256, uint256, uint256)
+        returns (uint256, uint256, uint256, uint256, uint256)
     {
         uint256 index;
-        (amountMade, index) = testCreateOrder(amountMade, price);
+        (amountMade, price, index) = testCreateOrder(amountMade, price, stake);
 
-        vm.assume(amountTaken < usdc.totalSupply());
         (uint256 accountingToPay, uint256 prevUnd) = swapper.previewTake(amountTaken);
         uint256 underlyingTaken;
         uint256 accountingTransfered;
-        if (accountingToPay > weth.balanceOf(wethWhale)) {
-            vm.startPrank(wethWhale);
-            vm.expectRevert(abi.encodePacked("ERC20: transfer amount exceeds balance"));
-            swapper.fulfillOrder(amountTaken, address(this));
-            vm.stopPrank();
-        } else {
-            vm.startPrank(wethWhale);
-            (accountingTransfered, underlyingTaken) = swapper.fulfillOrder(amountTaken, address(this));
-            assertEq(underlyingTaken, prevUnd);
-            vm.stopPrank();
-        }
-        return (amountMade, underlyingTaken, accountingTransfered, index);
+
+        token1.mint(taker, accountingToPay);
+
+        vm.startPrank(taker);
+        (accountingTransfered, underlyingTaken) = swapper.fulfillOrder(amountTaken, address(this));
+        assertEq(underlyingTaken, prevUnd);
+        vm.stopPrank();
+
+        return (amountMade, underlyingTaken, accountingTransfered, price, index);
     }
 
-    function testCancelOrder(uint256 amountMade, uint256 amountTaken, uint256 price) public {
+    function testCancelOrder(uint256 amountMade, uint256 amountTaken, uint256 price, uint256 stake) public {
         uint256 underlyingTaken = 0;
         uint256 accountingTransfered = 0;
         uint256 madeIndex = 0;
 
-        uint256 initialThisBalance = weth.balanceOf(address(swapper));
-        uint256 initialAccBalance = weth.balanceOf(usdcWhale);
-        (amountMade, underlyingTaken, accountingTransfered, madeIndex) = testFulfillOrder(
+        uint256 initialThisBalance = token1.balanceOf(address(swapper));
+        uint256 initialAccBalance = token1.balanceOf(maker);
+        (amountMade, underlyingTaken, accountingTransfered, price, madeIndex) = testFulfillOrder(
             amountMade,
             amountTaken,
-            price
+            price,
+            stake
         );
-
-        uint256 initialUndBalance = usdc.balanceOf(usdcWhale);
+        uint256 initialUndBalance = token0.balanceOf(maker);
 
         vm.expectRevert(bytes4(keccak256(abi.encodePacked("RestrictedToOwner()"))));
         swapper.cancelOrder(madeIndex, price);
@@ -123,40 +148,50 @@ contract PoolTest is Test {
         uint256 quotedUnd = swapper.previewRedeem(madeIndex, price);
         if (underlyingTaken >= amountMade) {
             // the order has been taken totally
-            vm.startPrank(usdcWhale);
+            vm.startPrank(maker);
             vm.expectRevert(bytes4(keccak256(abi.encodePacked("RestrictedToOwner()"))));
             swapper.cancelOrder(madeIndex, price);
             vm.stopPrank();
-            assertEq(weth.balanceOf(usdcWhale), initialAccBalance + accountingTransfered);
-            assertEq(usdc.balanceOf(address(this)), initialThisBalance + amountMade);
+            assertEq(token1.balanceOf(maker), initialAccBalance + accountingTransfered);
+            assertEq(token0.balanceOf(address(this)), initialThisBalance + amountMade);
         } else {
-            vm.prank(usdcWhale);
+            (
+                address transformedOwner,
+                ,
+                uint256 transformedAmount,
+                ,
+                uint256 transformedPrevious,
+                uint256 transformedNext
+            ) = swapper.orders(price, madeIndex);
+            vm.prank(maker);
             swapper.cancelOrder(madeIndex, price);
-            assertEq(usdc.balanceOf(usdcWhale), initialUndBalance + quotedUnd);
+            assertEq(token0.balanceOf(maker), initialUndBalance + quotedUnd);
         }
     }
 
     function testFirstInFirstOut(uint256 made1, uint256 made2, uint256 taken, uint256 price) public {
+        vm.assume(made1 > 0);
+        vm.assume(made2 > 0);
         // do not allow absurdely high prices that cause overflows
-        vm.assume(price < type(uint256).max / weth.balanceOf(wethWhale));
+        /// vm.assume(price < type(uint256).max / token1.balanceOf(taker));
 
-        uint256 initialWethBalance = weth.balanceOf(usdcWhale);
-        uint256 initialUsdcBalance = usdc.balanceOf(wethWhale);
+        uint256 initialtoken1Balance = token1.balanceOf(maker);
+        uint256 initialtoken0Balance = token0.balanceOf(taker);
 
         uint256 index1;
         uint256 index2;
-        (made1, index1) = testCreateOrder(made1, price);
-        made2 = usdc.balanceOf(usdcWhale) == 0 ? 0 : made2 % usdc.balanceOf(usdcWhale);
-        (made2, index2) = testCreateOrder(made2, price);
+        (made1, price, index1) = testCreateOrder(made1, price, 0);
+        made2 = token0.balanceOf(maker) == 0 ? 0 : made2 % token0.balanceOf(maker);
+        (made2, price, index2) = testCreateOrder(made2, price, 0);
 
         // Taker can afford to take
-        uint256 maxTaken = swapper.convertToUnderlying(weth.balanceOf(wethWhale), price);
+        uint256 maxTaken = swapper.convertToUnderlying(token1.balanceOf(taker), price);
         taken = maxTaken == 0 ? 0 : taken % maxTaken;
 
-        vm.prank(wethWhale);
-        (uint256 accountingToTransfer, uint256 underlyingToTransfer) = swapper.fulfillOrder(taken, wethWhale);
-        assertEq(weth.balanceOf(usdcWhale), initialWethBalance + accountingToTransfer);
-        assertEq(usdc.balanceOf(wethWhale), initialUsdcBalance + underlyingToTransfer);
+        vm.prank(taker);
+        (uint256 accountingToTransfer, uint256 underlyingToTransfer) = swapper.fulfillOrder(taken, taker);
+        assertEq(token1.balanceOf(maker), initialtoken1Balance + accountingToTransfer);
+        assertEq(token0.balanceOf(taker), initialtoken0Balance + underlyingToTransfer);
 
         uint256 prevAcc1 = swapper.previewRedeem(index1, price);
         uint256 prevAcc2 = swapper.previewRedeem(index2, price);

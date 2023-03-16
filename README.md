@@ -1,3 +1,3 @@
-# dex
+# Orderbook Dex - by Ithil Labs
 
-One or more dex options to be used for liquidity mining tokens
+A fully on-chain orderbook model dex
