@@ -5,6 +5,8 @@ import { IERC20, ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
+import { console2 } from "forge-std/console2.sol";
+
 contract Pool {
     using SafeERC20 for ERC20;
     using Math for uint256;
@@ -31,8 +33,13 @@ contract Pool {
     ERC20 public immutable accounting;
     ERC20 public immutable underlying;
 
-    // the accounting token decimals (stored to save gas);
+    // the accounting token decimals (stored to save gas)
     uint256 public immutable priceResolution;
+
+    // maximum price to prevent overflow (computed at construction to save gas)
+    uint256 public immutable maximumPrice;
+    // maximum amount to prevent overflow (computed at construction to save gas)
+    uint256 public immutable maximumAmount;
 
     // The minimum spacing percentage between prices, 1e4 corresponding to 100%
     // lower values allow for a more fluid price but frontrunning is exacerbated and staking less useful
@@ -61,6 +68,8 @@ contract Pool {
     error IncorrectTickSpacing();
     error NullAmount();
     error WrongIndex();
+    error PriceTooHigh();
+    error AmountTooHigh();
 
     constructor(address _underlying, address _accounting, uint16 _tick) {
         factory = msg.sender;
@@ -68,6 +77,8 @@ contract Pool {
         priceResolution = 10**accounting.decimals();
         underlying = ERC20(_underlying);
         tick = _tick;
+        maximumPrice = type(uint256).max / (10000 + tick);
+        maximumAmount = type(uint256).max / priceResolution;
     }
 
     // Example WETH / USDC, maker USDC, taker WETH
@@ -113,7 +124,6 @@ contract Pool {
             previous = next;
             next = orders[price][next].next;
         }
-
         orders[price][id[price]] = Order(maker, recipient, amount, staked, previous, next);
         // The "next" index of the previous node is now id[price] (already bumped by 1)
         orders[price][previous].next = id[price];
@@ -133,6 +143,8 @@ contract Pool {
     // Add a node to the list
     function createOrder(uint256 amount, uint256 price, address recipient) external payable {
         if (amount == 0 || price == 0) revert NullAmount();
+        if (price > maximumPrice) revert PriceTooHigh();
+        if (amount > maximumAmount) revert AmountTooHigh();
 
         underlying.safeTransferFrom(msg.sender, address(this), amount);
         _addNode(price, amount, msg.value, msg.sender, recipient);
@@ -227,7 +239,7 @@ contract Pool {
                 amount -= underlyingReceived;
             }
             accountingToPay += payStep;
-            price = priceLevels[price];
+            if (amount > 0) price = priceLevels[price];
         }
 
         return (accountingToPay, initialAmount - amount);

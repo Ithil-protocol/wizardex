@@ -8,6 +8,8 @@ import { Test } from "forge-std/Test.sol";
 import { Factory } from "../src/Factory.sol";
 import { Pool } from "../src/Pool.sol";
 
+import { console2 } from "forge-std/console2.sol";
+
 contract Wallet {
     receive() external payable {}
 }
@@ -23,14 +25,21 @@ contract PoolTest is Test {
     address internal immutable taker;
 
     uint256 internal constant priceResolution = 1e18;
+    uint16 internal immutable tick;
+
+    uint256 internal immutable maximumPrice;
+    uint256 internal immutable maximumAmount;
 
     constructor() {
         token0 = new ERC20PresetMinterPauser("token0", "TKN0");
         token1 = new ERC20PresetMinterPauser("token1", "TKN1");
         factory = new Factory();
-        swapper = Pool(factory.createPool(address(token0), address(token1), 1));
+        tick = 1;
+        swapper = Pool(factory.createPool(address(token0), address(token1), tick));
         maker = address(new Wallet());
         taker = address(new Wallet());
+        maximumPrice = type(uint256).max / (10000 + tick);
+        maximumAmount = type(uint256).max / priceResolution;
     }
 
     function setUp() public {
@@ -44,9 +53,11 @@ contract PoolTest is Test {
         token1.approve(address(swapper), type(uint256).max);
     }
 
-    function testCreateOrder(uint256 amount, uint256 price, uint256 stake) public returns (uint256, uint256) {
-        vm.assume(amount > 0);
-        price = bound(price, 1, type(uint256).max / 1e18);
+    function testCreateOrder(uint256 amount, uint256 price, uint256 stake) public returns (uint256, uint256, uint256) {
+        amount = amount % maximumAmount;
+        if (amount == 0) amount++;
+        price = price % maximumPrice;
+        if (price == 0) price++;
 
         token0.mint(maker, amount);
 
@@ -92,15 +103,15 @@ contract PoolTest is Test {
         assertEq(lastPrevious, initialLastIndex);
         assertEq(lastNext, 0);
 
-        return (amount, initialLastIndex + 1);
+        return (amount, price, initialLastIndex + 1);
     }
 
     function testFulfillOrder(uint256 amountMade, uint256 amountTaken, uint256 price, uint256 stake)
         public
-        returns (uint256, uint256, uint256, uint256)
+        returns (uint256, uint256, uint256, uint256, uint256)
     {
         uint256 index;
-        (amountMade, index) = testCreateOrder(amountMade, price, stake);
+        (amountMade, price, index) = testCreateOrder(amountMade, price, stake);
 
         (uint256 accountingToPay, uint256 prevUnd) = swapper.previewTake(amountTaken);
         uint256 underlyingTaken;
@@ -113,7 +124,7 @@ contract PoolTest is Test {
         assertEq(underlyingTaken, prevUnd);
         vm.stopPrank();
 
-        return (amountMade, underlyingTaken, accountingTransfered, index);
+        return (amountMade, underlyingTaken, accountingTransfered, price, index);
     }
 
     function testCancelOrder(uint256 amountMade, uint256 amountTaken, uint256 price, uint256 stake) public {
@@ -123,13 +134,12 @@ contract PoolTest is Test {
 
         uint256 initialThisBalance = token1.balanceOf(address(swapper));
         uint256 initialAccBalance = token1.balanceOf(maker);
-        (amountMade, underlyingTaken, accountingTransfered, madeIndex) = testFulfillOrder(
+        (amountMade, underlyingTaken, accountingTransfered, price, madeIndex) = testFulfillOrder(
             amountMade,
             amountTaken,
             price,
             stake
         );
-
         uint256 initialUndBalance = token0.balanceOf(maker);
 
         vm.expectRevert(bytes4(keccak256(abi.encodePacked("RestrictedToOwner()"))));
@@ -145,6 +155,14 @@ contract PoolTest is Test {
             assertEq(token1.balanceOf(maker), initialAccBalance + accountingTransfered);
             assertEq(token0.balanceOf(address(this)), initialThisBalance + amountMade);
         } else {
+            (
+                address transformedOwner,
+                ,
+                uint256 transformedAmount,
+                ,
+                uint256 transformedPrevious,
+                uint256 transformedNext
+            ) = swapper.orders(price, madeIndex);
             vm.prank(maker);
             swapper.cancelOrder(madeIndex, price);
             assertEq(token0.balanceOf(maker), initialUndBalance + quotedUnd);
@@ -162,9 +180,9 @@ contract PoolTest is Test {
 
         uint256 index1;
         uint256 index2;
-        (made1, index1) = testCreateOrder(made1, price, 0);
+        (made1, price, index1) = testCreateOrder(made1, price, 0);
         made2 = token0.balanceOf(maker) == 0 ? 0 : made2 % token0.balanceOf(maker);
-        (made2, index2) = testCreateOrder(made2, price, 0);
+        (made2, price, index2) = testCreateOrder(made2, price, 0);
 
         // Taker can afford to take
         uint256 maxTaken = swapper.convertToUnderlying(token1.balanceOf(taker), price);
