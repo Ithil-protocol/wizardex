@@ -14,7 +14,7 @@ contract Wallet {
     receive() external payable {}
 }
 
-contract PoolTest is Test {
+contract PoolUnitTest is Test {
     Factory internal immutable factory;
     Pool internal immutable swapper;
 

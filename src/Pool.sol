@@ -54,7 +54,15 @@ contract Pool {
     // orders[price][id]
     mapping(uint256 => mapping(uint256 => Order)) public orders;
 
-    event OrderCreated(address indexed offerer, uint256 index, uint256 amount, uint256 price);
+    event OrderCreated(
+        address indexed offerer,
+        uint256 price,
+        uint256 index,
+        uint256 underlyingAmount,
+        uint256 staked,
+        uint256 previous,
+        uint256 next
+    );
     event OrderFulfilled(
         address indexed offerer,
         address indexed fulfiller,
@@ -98,7 +106,10 @@ contract Pool {
         return lower == 0 || higher >= lower.mulDiv(tick + 10000, 10000, Math.Rounding.Up);
     }
 
-    function _addNode(uint256 price, uint256 amount, uint256 staked, address maker, address recipient) internal {
+    function _addNode(uint256 price, uint256 amount, uint256 staked, address maker, address recipient)
+        internal
+        returns (uint256, uint256)
+    {
         uint256 higherPrice = 0;
         while (priceLevels[higherPrice] > price) {
             higherPrice = priceLevels[higherPrice];
@@ -129,6 +140,7 @@ contract Pool {
         orders[price][previous].next = id[price];
         // The "previous" index of the 0 node is now id[price]
         orders[price][next].previous = id[price];
+        return (previous, next);
     }
 
     function _deleteNode(uint256 price, uint256 index) internal {
@@ -145,11 +157,10 @@ contract Pool {
         if (amount == 0 || price == 0) revert NullAmount();
         if (price > maximumPrice) revert PriceTooHigh();
         if (amount > maximumAmount) revert AmountTooHigh();
-
         underlying.safeTransferFrom(msg.sender, address(this), amount);
-        _addNode(price, amount, msg.value, msg.sender, recipient);
+        (uint256 previous, uint256 next) = _addNode(price, amount, msg.value, msg.sender, recipient);
 
-        emit OrderCreated(msg.sender, id[price], amount, price);
+        emit OrderCreated(msg.sender, price, id[price], amount, msg.value, previous, next);
     }
 
     function cancelOrder(uint256 index, uint256 price) external {
@@ -170,6 +181,7 @@ contract Pool {
 
     // amount is always of underlying currency
     function fulfillOrder(uint256 amount, address receiver) external returns (uint256, uint256) {
+        console2.log("fulfillOrder amount", amount);
         uint256 accountingToPay = 0;
         uint256 initialAmount = amount;
         while (amount > 0 && priceLevels[0] != 0) {
@@ -200,7 +212,6 @@ contract Pool {
             _deleteNode(price, cursor);
             amount -= order.underlyingAmount;
             cursor = order.next;
-
             if (order.staked > 0) {
                 (bool success, ) = factory.call{ value: order.staked }("");
                 assert(success);
@@ -233,7 +244,7 @@ contract Pool {
         uint256 initialAmount = amount;
         uint256 price = priceLevels[0];
         while (amount > 0 && price != 0) {
-            (uint256 payStep, uint256 underlyingReceived) = previewTakeByPrice(amount, priceLevels[0]);
+            (uint256 payStep, uint256 underlyingReceived) = previewTakeByPrice(amount, price);
             // underlyingPaid <= amount
             unchecked {
                 amount -= underlyingReceived;
