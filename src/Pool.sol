@@ -54,15 +54,16 @@ contract Pool {
     // orders[price][id]
     mapping(uint256 => mapping(uint256 => Order)) public orders;
 
-    event OrderCreated(address indexed offerer, uint256 index, uint256 amount, uint256 price);
+    event OrderCreated(uint256 indexed id, address indexed offerer, uint256 amount, uint256 price);
     event OrderFulfilled(
+        uint256 indexed id,
         address indexed offerer,
         address indexed fulfiller,
         uint256 accountingToTransfer,
         uint256 amount,
         uint256 price
     );
-    event OrderCancelled(address indexed offerer, uint256 index, uint256 price, uint256 underlyingToTransfer);
+    event OrderCancelled(uint256 indexed id, address indexed offerer, uint256 price, uint256 underlyingToTransfer);
 
     error RestrictedToOwner();
     error IncorrectTickSpacing();
@@ -149,7 +150,7 @@ contract Pool {
         underlying.safeTransferFrom(msg.sender, address(this), amount);
         _addNode(price, amount, msg.value, msg.sender, recipient);
 
-        emit OrderCreated(msg.sender, id[price], amount, price);
+        emit OrderCreated(id[price], msg.sender, amount, price);
     }
 
     function cancelOrder(uint256 index, uint256 price) external {
@@ -165,7 +166,7 @@ contract Pool {
             assert(success);
         }
 
-        emit OrderCancelled(order.offerer, index, price, order.underlyingAmount);
+        emit OrderCancelled(index, order.offerer, price, order.underlyingAmount);
     }
 
     // amount is always of underlying currency
@@ -222,7 +223,7 @@ contract Pool {
 
         underlying.safeTransfer(receiver, initialAmount - amount);
 
-        emit OrderFulfilled(order.offerer, msg.sender, accountingToTransfer, initialAmount - amount, price);
+        emit OrderFulfilled(id[price], order.offerer, msg.sender, accountingToTransfer, initialAmount - amount, price);
 
         return (accountingToTransfer, initialAmount - amount);
     }
