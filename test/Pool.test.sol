@@ -5,12 +5,27 @@ import { IERC20, IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/exte
 import { ERC20PresetMinterPauser } from "@openzeppelin/contracts/token/ERC20/presets/ERC20PresetMinterPauser.sol";
 import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { Test } from "forge-std/Test.sol";
+import { IMaker } from "../src/interfaces/IMaker.sol";
 import { Factory } from "../src/Factory.sol";
 import { Pool } from "../src/Pool.sol";
 
-import { console2 } from "forge-std/console2.sol";
-
 contract Wallet {
+    bool public triggered;
+
+    constructor() {
+        triggered = false;
+    }
+
+    function setFlag(bool _triggered) external {
+        triggered = _triggered;
+    }
+
+    function onOrderFulilled(address taker, address accounting, address underlying, uint256 amount, uint256 price)
+        external
+    {
+        triggered = true;
+    }
+
     receive() external payable {}
 }
 
@@ -192,6 +207,7 @@ contract PoolTest is Test {
         (uint256 accountingToTransfer, uint256 underlyingToTransfer) = swapper.fulfillOrder(taken, taker);
         assertEq(token1.balanceOf(maker), initialtoken1Balance + accountingToTransfer);
         assertEq(token0.balanceOf(taker), initialtoken0Balance + underlyingToTransfer);
+        if(underlyingToTransfer > 0) assertTrue(Wallet(payable(taker)).triggered() == true);
 
         uint256 prevAcc1 = swapper.previewRedeem(index1, price);
         uint256 prevAcc2 = swapper.previewRedeem(index2, price);

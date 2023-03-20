@@ -4,6 +4,8 @@ pragma solidity =0.8.17;
 import { IERC20, ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
+import { Address } from "@openzeppelin/contracts/utils/Address.sol";
+import { IMaker } from "./interfaces/IMaker.sol";
 
 contract Pool {
     using SafeERC20 for ERC20;
@@ -205,6 +207,8 @@ contract Pool {
                 assert(success);
             }
 
+            _transferHook(order.recipient, address(accounting), address(underlying), toTransfer, price); // TODO check
+
             // in case the next is zero, we reached the end of all orders
             if (cursor == 0) break;
             order = orders[price][cursor];
@@ -273,5 +277,11 @@ contract Pool {
     // View function to calculate how much accounting and underlying a redeem would return
     function previewRedeem(uint256 index, uint256 price) external view returns (uint256) {
         return orders[price][index].underlyingAmount;
+    }
+
+    function _transferHook(address to, address accounting, address underlying, uint256 amount, uint256 price) internal {
+        if (Address.isContract(to)) {
+            try IMaker(to).onOrderFulilled(msg.sender, accounting, underlying, amount, price) {} catch {}
+        }
     }
 }
