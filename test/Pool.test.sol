@@ -207,7 +207,7 @@ contract PoolTest is Test {
         (uint256 accountingToTransfer, uint256 underlyingToTransfer) = swapper.fulfillOrder(taken, taker);
         assertEq(token1.balanceOf(maker), initialtoken1Balance + accountingToTransfer);
         assertEq(token0.balanceOf(taker), initialtoken0Balance + underlyingToTransfer);
-        if(underlyingToTransfer > 0) assertTrue(Wallet(payable(taker)).triggered() == true);
+        if (underlyingToTransfer > 0) assertTrue(Wallet(payable(taker)).triggered() == true);
 
         uint256 prevAcc1 = swapper.previewRedeem(index1, price);
         uint256 prevAcc2 = swapper.previewRedeem(index2, price);
