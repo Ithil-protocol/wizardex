@@ -54,7 +54,15 @@ contract Pool {
     // orders[price][id]
     mapping(uint256 => mapping(uint256 => Order)) public orders;
 
-    event OrderCreated(address indexed offerer, uint256 index, uint256 amount, uint256 price);
+    event OrderCreated(
+        address indexed offerer,
+        uint256 price,
+        uint256 index,
+        uint256 underlyingAmount,
+        uint256 staked,
+        uint256 previous,
+        uint256 next
+    );
     event OrderFulfilled(
         address indexed offerer,
         address indexed fulfiller,
@@ -98,7 +106,10 @@ contract Pool {
         return lower == 0 || higher >= lower.mulDiv(tick + 10000, 10000, Math.Rounding.Up);
     }
 
-    function _addNode(uint256 price, uint256 amount, uint256 staked, address maker, address recipient) internal {
+    function _addNode(uint256 price, uint256 amount, uint256 staked, address maker, address recipient)
+        internal
+        returns (uint256, uint256)
+    {
         uint256 higherPrice = 0;
         while (priceLevels[higherPrice] > price) {
             higherPrice = priceLevels[higherPrice];
@@ -129,10 +140,31 @@ contract Pool {
         orders[price][previous].next = id[price];
         // The "previous" index of the 0 node is now id[price]
         orders[price][next].previous = id[price];
+        return (previous, next);
+    }
+
+    function previewOrder(uint256 price, uint256 staked)
+        public
+        view
+        returns (uint256 prev, uint256 next, uint256 position, uint256 cumulativeUndAmount)
+    {
+        next = orders[price][0].next;
+
+        while (staked <= orders[price][next].staked && next != 0) {
+            cumulativeUndAmount += orders[price][next].underlyingAmount;
+            position++;
+            prev = next;
+            next = orders[price][next].next;
+        }
+        return (prev, next, position, cumulativeUndAmount);
     }
 
     function _deleteNode(uint256 price, uint256 index) internal {
+        // Zero index cannot be deleted
+        assert(index != 0);
         Order memory toDelete = orders[price][index];
+        // If the offerer is zero, the order was already canceled or fulfilled
+        if (toDelete.offerer == address(0)) revert WrongIndex();
 
         orders[price][toDelete.previous].next = toDelete.next;
         orders[price][toDelete.next].previous = toDelete.previous;
@@ -145,11 +177,10 @@ contract Pool {
         if (amount == 0 || price == 0) revert NullAmount();
         if (price > maximumPrice) revert PriceTooHigh();
         if (amount > maximumAmount) revert AmountTooHigh();
-
         underlying.safeTransferFrom(msg.sender, address(this), amount);
-        _addNode(price, amount, msg.value, msg.sender, recipient);
+        (uint256 previous, uint256 next) = _addNode(price, amount, msg.value, msg.sender, recipient);
 
-        emit OrderCreated(msg.sender, id[price], amount, price);
+        emit OrderCreated(msg.sender, price, id[price], amount, msg.value, previous, next);
     }
 
     function cancelOrder(uint256 index, uint256 price) external {
@@ -169,28 +200,39 @@ contract Pool {
     }
 
     // amount is always of underlying currency
-    function fulfillOrder(uint256 amount, address receiver) external returns (uint256, uint256) {
+    function fulfillOrder(uint256 amount, address receiver) external returns (uint256, uint256, uint256) {
         uint256 accountingToPay = 0;
+        uint256 ethToFactory = 0;
         uint256 initialAmount = amount;
         while (amount > 0 && priceLevels[0] != 0) {
-            (uint256 payStep, uint256 underlyingReceived) = fulfillOrderByPrice(amount, priceLevels[0], receiver);
+            (uint256 payStep, uint256 underlyingReceived, uint256 partialEthToFactory) = fulfillOrderByPrice(
+                amount,
+                priceLevels[0],
+                receiver
+            );
             // underlyingPaid <= amount
             unchecked {
                 amount -= underlyingReceived;
             }
             accountingToPay += payStep;
+            ethToFactory += partialEthToFactory;
             if (amount > 0) priceLevels[0] = priceLevels[priceLevels[0]];
         }
 
-        return (accountingToPay, initialAmount - amount);
+        return (accountingToPay, initialAmount - amount, ethToFactory);
     }
 
     // amount is always of underlying currency
-    function fulfillOrderByPrice(uint256 amount, uint256 price, address receiver) internal returns (uint256, uint256) {
+    function fulfillOrderByPrice(uint256 amount, uint256 price, address receiver)
+        internal
+        returns (uint256, uint256, uint256)
+    {
         uint256 cursor = orders[price][0].next;
+        if (cursor == 0) return (0, 0, 0);
         Order memory order = orders[price][cursor];
 
         uint256 accountingToTransfer = 0;
+        uint256 ethToFactory = 0;
         uint256 initialAmount = amount;
 
         while (amount >= order.underlyingAmount) {
@@ -200,9 +242,9 @@ contract Pool {
             _deleteNode(price, cursor);
             amount -= order.underlyingAmount;
             cursor = order.next;
-
             if (order.staked > 0) {
                 (bool success, ) = factory.call{ value: order.staked }("");
+                ethToFactory += order.staked;
                 assert(success);
             }
 
@@ -224,37 +266,45 @@ contract Pool {
 
         emit OrderFulfilled(order.offerer, msg.sender, accountingToTransfer, initialAmount - amount, price);
 
-        return (accountingToTransfer, initialAmount - amount);
+        return (accountingToTransfer, initialAmount - amount, ethToFactory);
     }
 
     // amount is always of underlying currency
-    function previewTake(uint256 amount) external view returns (uint256, uint256) {
+    function previewTake(uint256 amount) external view returns (uint256, uint256, uint256) {
         uint256 accountingToPay = 0;
         uint256 initialAmount = amount;
+        uint256 ethToFactory = 0;
         uint256 price = priceLevels[0];
         while (amount > 0 && price != 0) {
-            (uint256 payStep, uint256 underlyingReceived) = previewTakeByPrice(amount, priceLevels[0]);
+            (uint256 payStep, uint256 underlyingReceived, uint256 partialEthToFactory) = previewTakeByPrice(
+                amount,
+                price
+            );
             // underlyingPaid <= amount
             unchecked {
                 amount -= underlyingReceived;
             }
             accountingToPay += payStep;
+            ethToFactory += partialEthToFactory;
             if (amount > 0) price = priceLevels[price];
         }
 
-        return (accountingToPay, initialAmount - amount);
+        return (accountingToPay, initialAmount - amount, ethToFactory);
     }
 
     // View function to calculate how much accounting the taker needs to take amount
-    function previewTakeByPrice(uint256 amount, uint256 price) internal view returns (uint256, uint256) {
+    function previewTakeByPrice(uint256 amount, uint256 price) internal view returns (uint256, uint256, uint256) {
         uint256 cursor = orders[price][0].next;
+        if (cursor == 0) return (0, 0, 0);
         Order memory order = orders[price][cursor];
 
+        uint256 ethToFactory = 0;
         uint256 accountingToTransfer = 0;
         uint256 initialAmount = amount;
         while (amount >= order.underlyingAmount) {
             uint256 toTransfer = convertToAccounting(order.underlyingAmount, price);
             accountingToTransfer += toTransfer;
+            ethToFactory += order.staked;
             amount -= order.underlyingAmount;
             cursor = order.next;
             // in case the next is zero, we reached the end of all orders
@@ -268,7 +318,7 @@ contract Pool {
             amount = 0;
         }
 
-        return (accountingToTransfer, initialAmount - amount);
+        return (accountingToTransfer, initialAmount - amount, ethToFactory);
     }
 
     // View function to calculate how much accounting and underlying a redeem would return
