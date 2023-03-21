@@ -143,6 +143,22 @@ contract Pool {
         return (previous, next);
     }
 
+    function previewOrder(uint256 price, uint256 staked)
+        public
+        view
+        returns (uint256 prev, uint256 next, uint256 position, uint256 cumulativeUndAmount)
+    {
+        next = orders[price][0].next;
+
+        while (staked <= orders[price][next].staked && next != 0) {
+            cumulativeUndAmount += orders[price][next].underlyingAmount;
+            position++;
+            prev = next;
+            next = orders[price][next].next;
+        }
+        return (prev, next, position, cumulativeUndAmount);
+    }
+
     function _deleteNode(uint256 price, uint256 index) internal {
         Order memory toDelete = orders[price][index];
 

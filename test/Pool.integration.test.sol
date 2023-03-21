@@ -14,8 +14,8 @@ contract Randomizer is Test {
     Factory internal immutable factory;
     Pool internal immutable swapper;
 
-    ERC20PresetMinterPauser internal immutable token0;
-    ERC20PresetMinterPauser internal immutable token1;
+    ERC20PresetMinterPauser internal immutable underlying;
+    ERC20PresetMinterPauser internal immutable accounting;
 
     address internal immutable maker1;
     address internal immutable taker1;
@@ -39,11 +39,11 @@ contract Randomizer is Test {
     }
 
     constructor(uint16 _tick) {
-        token0 = new ERC20PresetMinterPauser("token0", "TKN0");
-        token1 = new ERC20PresetMinterPauser("token1", "TKN1");
+        underlying = new ERC20PresetMinterPauser("underlying", "TKN0");
+        accounting = new ERC20PresetMinterPauser("accounting", "TKN1");
         factory = new Factory();
         tick = _tick;
-        swapper = Pool(factory.createPool(address(token0), address(token1), tick));
+        swapper = Pool(factory.createPool(address(underlying), address(accounting), tick));
         maker1 = address(new Wallet());
         taker1 = address(new Wallet());
         maker2 = address(new Wallet());
@@ -61,16 +61,16 @@ contract Randomizer is Test {
         vm.deal(taker2, 1 ether);
 
         vm.prank(maker1);
-        token0.approve(address(swapper), type(uint256).max);
+        underlying.approve(address(swapper), type(uint256).max);
 
         vm.prank(taker1);
-        token1.approve(address(swapper), type(uint256).max);
+        accounting.approve(address(swapper), type(uint256).max);
 
         vm.prank(maker2);
-        token0.approve(address(swapper), type(uint256).max);
+        underlying.approve(address(swapper), type(uint256).max);
 
         vm.prank(taker2);
-        token1.approve(address(swapper), type(uint256).max);
+        accounting.approve(address(swapper), type(uint256).max);
     }
 
     function _createOrder(uint256 amount, uint256 price, uint256 stake, uint256 seed) internal returns (uint256) {
@@ -95,39 +95,44 @@ contract Randomizer is Test {
             priceLevels[i] = priceLevel;
             priceLevel = swapper.priceLevels(priceLevel);
         }
-        // Orders before the order opening (up to 8 allowed)
-        OrderData[8] memory indexChain;
-        (, , , uint256 staked, uint256 previous, uint256 next) = swapper.orders(price, 0);
-        for (uint256 i = 0; i < 8 && next != 0; i++) {
-            indexChain[i] = OrderData(staked, previous, next);
-            (, , , staked, previous, next) = swapper.orders(price, next);
-        }
+
+        (uint256 previewedPrev, uint256 previewedNext, , ) = swapper.previewOrder(price, stake);
 
         if (seed % 2 == 1) {
             if (stake > 0) {
                 vm.deal(maker1, stake);
             }
-            token0.mint(maker1, amount);
+            underlying.mint(maker1, amount);
             vm.prank(maker1);
             swapper.createOrder{ value: stake }(amount, price, makerRecipient);
         } else {
             if (stake > 0) {
                 vm.deal(maker2, stake);
             }
-            token0.mint(maker2, amount);
+            underlying.mint(maker2, amount);
             vm.prank(maker2);
             swapper.createOrder{ value: stake }(amount, price, makerRecipient);
         }
-        uint256 madeIndex = swapper.id(price);
-        makerIndexes.push(madeIndex);
+        makerIndexes.push(swapper.id(price));
 
         // ORDERS CHECKS
-        // define new indexChain array for convenience
-        OrderData[8] memory newIndexChain;
+        // Check insertion went well
+        (, , , uint256 staked, uint256 previous, uint256 next) = swapper.orders(price, swapper.id(price));
+        assertEq(previous, previewedPrev);
+        assertEq(next, previewedNext);
+        // Check orderbook consistency (maximum 8 allowed)
+        // Cursor restarts from zero
         (, , , staked, previous, next) = swapper.orders(price, 0);
         for (uint256 i = 0; i < 8 && next != 0; i++) {
-            newIndexChain[i] = OrderData(staked, previous, next);
+            uint256 prevStake = staked;
+            uint256 prevNext = next;
             (, , , staked, previous, next) = swapper.orders(price, next);
+            // Check FIFO and boost order as we go
+            // Stakes must be non-increasing (except for first one which is zero)
+            if (i == 0) assertEq(prevStake, 0);
+            else assertGe(prevStake, staked);
+            // if stakes are constant, FIFO applies
+            if (prevStake == staked) assertGt(prevNext, previous);
         }
 
         // PRICE LEVEL CHECKS
@@ -159,11 +164,30 @@ contract Randomizer is Test {
         // If the order exists, it pranks the order offerer and cancels
         if (makerIndexes.length == 0) return; // (There is no index initialized yet so nothing to do)
         index = makerIndexes[index % makerIndexes.length]; // (Could be empty if it was fulfilled)
-        (address offerer, , , , , ) = swapper.orders(price, index);
+        (address offerer, , uint256 underlyingAmount, uint256 staked, uint256 previous, uint256 next) = swapper.orders(
+            price,
+            index
+        );
+        uint256 initialSwapperBalance = underlying.balanceOf(address(swapper));
+        uint256 initialOffererBalance = underlying.balanceOf(offerer);
+        uint256 initialSwapperEthBalance = address(swapper).balance;
+        uint256 initialOffererEthBalance = offerer.balance;
         if (offerer != address(0)) {
             vm.prank(offerer);
             swapper.cancelOrder(index, price);
         }
+
+        // Check order deletion
+        (, , , , uint256 newPrev, ) = swapper.orders(price, next);
+        (, , , , , uint256 newNext) = swapper.orders(price, previous);
+        assertEq(newPrev, previous);
+        assertEq(newNext, next);
+
+        // Check balances
+        assertEq(underlying.balanceOf(offerer), initialOffererBalance + underlyingAmount);
+        assertEq(underlying.balanceOf(address(swapper)), initialSwapperBalance - underlyingAmount);
+        assertEq(offerer.balance, initialOffererEthBalance + staked);
+        assertEq(address(swapper).balance, initialSwapperEthBalance - staked);
     }
 
     function _fulfillOrder(uint256 amount, uint256 seed)
@@ -172,11 +196,11 @@ contract Randomizer is Test {
     {
         (uint256 previewAccounting, ) = swapper.previewTake(amount);
         if (seed % 2 == 1) {
-            token1.mint(taker1, previewAccounting);
+            accounting.mint(taker1, previewAccounting);
             vm.prank(taker1);
             (accountingPaid, underlyingReceived) = swapper.fulfillOrder(amount, takerRecipient);
         } else {
-            token1.mint(taker2, previewAccounting);
+            accounting.mint(taker2, previewAccounting);
             vm.prank(taker2);
             (accountingPaid, underlyingReceived) = swapper.fulfillOrder(amount, takerRecipient);
         }
