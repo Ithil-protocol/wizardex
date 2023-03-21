@@ -74,6 +74,7 @@ contract Randomizer is Test {
     }
 
     function _createOrder(uint256 amount, uint256 price, uint256 stake, uint256 seed) internal returns (uint256) {
+        console2.log("_createOrder");
         // Creates a *valid* order, does not revert by itself
         // The creator of the order is random
         // Returns the index of the order
@@ -160,6 +161,7 @@ contract Randomizer is Test {
     }
 
     function _cancelOrder(uint256 index, uint256 price) internal {
+        console2.log("_cancelOrder");
         // Cancels an order only if it exists
         // If the order exists, it pranks the order offerer and cancels
         if (makerIndexes.length == 0) return; // (There is no index initialized yet so nothing to do)
@@ -175,13 +177,12 @@ contract Randomizer is Test {
         if (offerer != address(0)) {
             vm.prank(offerer);
             swapper.cancelOrder(index, price);
+            // Check order deletion
+            (, , , , uint256 newPrev, ) = swapper.orders(price, next);
+            (, , , , , uint256 newNext) = swapper.orders(price, previous);
+            assertEq(newPrev, previous);
+            assertEq(newNext, next);
         }
-
-        // Check order deletion
-        (, , , , uint256 newPrev, ) = swapper.orders(price, next);
-        (, , , , , uint256 newNext) = swapper.orders(price, previous);
-        assertEq(newPrev, previous);
-        assertEq(newNext, next);
 
         // Check balances
         assertEq(underlying.balanceOf(offerer), initialOffererBalance + underlyingAmount);
@@ -194,16 +195,25 @@ contract Randomizer is Test {
         internal
         returns (uint256 accountingPaid, uint256 underlyingReceived)
     {
-        (uint256 previewAccounting, ) = swapper.previewTake(amount);
+        console2.log("_fulfillOrder");
+        (uint256 previewAccounting, uint256 previewUnderlying) = swapper.previewTake(amount);
+        uint256 initialUnderlying = underlying.balanceOf(takerRecipient);
         if (seed % 2 == 1) {
             accounting.mint(taker1, previewAccounting);
+            uint256 initialAccounting = accounting.balanceOf(taker1);
             vm.prank(taker1);
             (accountingPaid, underlyingReceived) = swapper.fulfillOrder(amount, takerRecipient);
+            assertEq(accounting.balanceOf(taker1), initialAccounting - accountingPaid);
         } else {
             accounting.mint(taker2, previewAccounting);
+            uint256 initialAccounting = accounting.balanceOf(taker2);
             vm.prank(taker2);
             (accountingPaid, underlyingReceived) = swapper.fulfillOrder(amount, takerRecipient);
+            assertEq(accounting.balanceOf(taker2), initialAccounting - accountingPaid);
         }
+        assertEq(previewUnderlying, underlyingReceived);
+        assertEq(previewAccounting, accountingPaid);
+        assertEq(underlying.balanceOf(takerRecipient), initialUnderlying + underlyingReceived);
     }
 
     function _randomCall(uint256 amount, uint256 price, uint256 stake, uint256 index, uint256 seed)
@@ -259,6 +269,33 @@ contract PoolIntegrationTest is Randomizer {
             amount = _modifyAmount(amount, seed);
             price = _modifyAmount(price, (seed / 2) + 1);
             stake = _modifyAmount(stake, (seed / 3) + 2);
+            seed = _modifyAmount(seed, (seed / 4) + 3);
+        }
+    }
+
+    function testSamePrice(uint256 amount, uint256 price, uint256 stake, uint256 index, uint256 seed)
+        public
+        returns (uint256 createdIndex, uint256 accountingPaid, uint256 underlyingReceived)
+    {
+        for (uint256 i = 0; i < 3; i++) {
+            (createdIndex, accountingPaid, underlyingReceived) = _randomCall(amount, price, stake, index, seed);
+            // Change seeds every time so that even equality of inputs is shuffled
+            // Price is never modified
+            amount = _modifyAmount(amount, seed);
+            stake = _modifyAmount(stake, (seed / 3) + 2);
+            seed = _modifyAmount(seed, (seed / 4) + 3);
+        }
+    }
+
+    function testSamePriceAndStake(uint256 amount, uint256 price, uint256 stake, uint256 index, uint256 seed)
+        public
+        returns (uint256 createdIndex, uint256 accountingPaid, uint256 underlyingReceived)
+    {
+        for (uint256 i = 0; i < 3; i++) {
+            (createdIndex, accountingPaid, underlyingReceived) = _randomCall(amount, price, stake, index, seed);
+            // Change seeds every time so that even equality of inputs is shuffled
+            // Price and stake are never modified
+            amount = _modifyAmount(amount, seed);
             seed = _modifyAmount(seed, (seed / 4) + 3);
         }
     }

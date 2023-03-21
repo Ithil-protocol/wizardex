@@ -160,7 +160,11 @@ contract Pool {
     }
 
     function _deleteNode(uint256 price, uint256 index) internal {
+        // Zero index cannot be deleted
+        assert(index != 0);
         Order memory toDelete = orders[price][index];
+        // If the offerer is zero, the order was already canceled or fulfilled
+        if (toDelete.offerer == address(0)) revert WrongIndex();
 
         orders[price][toDelete.previous].next = toDelete.next;
         orders[price][toDelete.next].previous = toDelete.previous;
@@ -197,7 +201,6 @@ contract Pool {
 
     // amount is always of underlying currency
     function fulfillOrder(uint256 amount, address receiver) external returns (uint256, uint256) {
-        console2.log("fulfillOrder amount", amount);
         uint256 accountingToPay = 0;
         uint256 initialAmount = amount;
         while (amount > 0 && priceLevels[0] != 0) {
@@ -216,6 +219,7 @@ contract Pool {
     // amount is always of underlying currency
     function fulfillOrderByPrice(uint256 amount, uint256 price, address receiver) internal returns (uint256, uint256) {
         uint256 cursor = orders[price][0].next;
+        if (cursor == 0) return (0, 0);
         Order memory order = orders[price][cursor];
 
         uint256 accountingToTransfer = 0;
