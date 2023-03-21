@@ -200,29 +200,39 @@ contract Pool {
     }
 
     // amount is always of underlying currency
-    function fulfillOrder(uint256 amount, address receiver) external returns (uint256, uint256) {
+    function fulfillOrder(uint256 amount, address receiver) external returns (uint256, uint256, uint256) {
         uint256 accountingToPay = 0;
+        uint256 ethToFactory = 0;
         uint256 initialAmount = amount;
         while (amount > 0 && priceLevels[0] != 0) {
-            (uint256 payStep, uint256 underlyingReceived) = fulfillOrderByPrice(amount, priceLevels[0], receiver);
+            (uint256 payStep, uint256 underlyingReceived, uint256 partialEthToFactory) = fulfillOrderByPrice(
+                amount,
+                priceLevels[0],
+                receiver
+            );
             // underlyingPaid <= amount
             unchecked {
                 amount -= underlyingReceived;
             }
             accountingToPay += payStep;
+            ethToFactory += partialEthToFactory;
             if (amount > 0) priceLevels[0] = priceLevels[priceLevels[0]];
         }
 
-        return (accountingToPay, initialAmount - amount);
+        return (accountingToPay, initialAmount - amount, ethToFactory);
     }
 
     // amount is always of underlying currency
-    function fulfillOrderByPrice(uint256 amount, uint256 price, address receiver) internal returns (uint256, uint256) {
+    function fulfillOrderByPrice(uint256 amount, uint256 price, address receiver)
+        internal
+        returns (uint256, uint256, uint256)
+    {
         uint256 cursor = orders[price][0].next;
-        if (cursor == 0) return (0, 0);
+        if (cursor == 0) return (0, 0, 0);
         Order memory order = orders[price][cursor];
 
         uint256 accountingToTransfer = 0;
+        uint256 ethToFactory = 0;
         uint256 initialAmount = amount;
 
         while (amount >= order.underlyingAmount) {
@@ -234,6 +244,7 @@ contract Pool {
             cursor = order.next;
             if (order.staked > 0) {
                 (bool success, ) = factory.call{ value: order.staked }("");
+                ethToFactory += order.staked;
                 assert(success);
             }
 
@@ -255,37 +266,45 @@ contract Pool {
 
         emit OrderFulfilled(order.offerer, msg.sender, accountingToTransfer, initialAmount - amount, price);
 
-        return (accountingToTransfer, initialAmount - amount);
+        return (accountingToTransfer, initialAmount - amount, ethToFactory);
     }
 
     // amount is always of underlying currency
-    function previewTake(uint256 amount) external view returns (uint256, uint256) {
+    function previewTake(uint256 amount) external view returns (uint256, uint256, uint256) {
         uint256 accountingToPay = 0;
         uint256 initialAmount = amount;
+        uint256 ethToFactory = 0;
         uint256 price = priceLevels[0];
         while (amount > 0 && price != 0) {
-            (uint256 payStep, uint256 underlyingReceived) = previewTakeByPrice(amount, price);
+            (uint256 payStep, uint256 underlyingReceived, uint256 partialEthToFactory) = previewTakeByPrice(
+                amount,
+                price
+            );
             // underlyingPaid <= amount
             unchecked {
                 amount -= underlyingReceived;
             }
             accountingToPay += payStep;
+            ethToFactory += partialEthToFactory;
             if (amount > 0) price = priceLevels[price];
         }
 
-        return (accountingToPay, initialAmount - amount);
+        return (accountingToPay, initialAmount - amount, ethToFactory);
     }
 
     // View function to calculate how much accounting the taker needs to take amount
-    function previewTakeByPrice(uint256 amount, uint256 price) internal view returns (uint256, uint256) {
+    function previewTakeByPrice(uint256 amount, uint256 price) internal view returns (uint256, uint256, uint256) {
         uint256 cursor = orders[price][0].next;
+        if (cursor == 0) return (0, 0, 0);
         Order memory order = orders[price][cursor];
 
+        uint256 ethToFactory = 0;
         uint256 accountingToTransfer = 0;
         uint256 initialAmount = amount;
         while (amount >= order.underlyingAmount) {
             uint256 toTransfer = convertToAccounting(order.underlyingAmount, price);
             accountingToTransfer += toTransfer;
+            ethToFactory += order.staked;
             amount -= order.underlyingAmount;
             cursor = order.next;
             // in case the next is zero, we reached the end of all orders
@@ -299,7 +318,7 @@ contract Pool {
             amount = 0;
         }
 
-        return (accountingToTransfer, initialAmount - amount);
+        return (accountingToTransfer, initialAmount - amount, ethToFactory);
     }
 
     // View function to calculate how much accounting and underlying a redeem would return

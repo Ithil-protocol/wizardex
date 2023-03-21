@@ -113,14 +113,14 @@ contract PoolUnitTest is Test {
         uint256 index;
         (amountMade, price, index) = testCreateOrder(amountMade, price, stake);
 
-        (uint256 accountingToPay, uint256 prevUnd) = swapper.previewTake(amountTaken);
+        (uint256 accountingToPay, uint256 prevUnd, ) = swapper.previewTake(amountTaken);
         uint256 underlyingTaken;
         uint256 accountingTransfered;
 
         token1.mint(taker, accountingToPay);
 
         vm.startPrank(taker);
-        (accountingTransfered, underlyingTaken) = swapper.fulfillOrder(amountTaken, address(this));
+        (accountingTransfered, underlyingTaken, ) = swapper.fulfillOrder(amountTaken, address(this));
         assertEq(underlyingTaken, prevUnd);
         vm.stopPrank();
 
@@ -189,7 +189,7 @@ contract PoolUnitTest is Test {
         taken = maxTaken == 0 ? 0 : taken % maxTaken;
 
         vm.prank(taker);
-        (uint256 accountingToTransfer, uint256 underlyingToTransfer) = swapper.fulfillOrder(taken, taker);
+        (uint256 accountingToTransfer, uint256 underlyingToTransfer, ) = swapper.fulfillOrder(taken, taker);
         assertEq(token1.balanceOf(maker), initialtoken1Balance + accountingToTransfer);
         assertEq(token0.balanceOf(taker), initialtoken0Balance + underlyingToTransfer);
 

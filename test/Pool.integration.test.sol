@@ -197,23 +197,27 @@ contract Randomizer is Test {
         internal
         returns (uint256 accountingPaid, uint256 underlyingReceived)
     {
-        (uint256 previewAccounting, uint256 previewUnderlying) = swapper.previewTake(amount);
+        uint256 initialFactoryBalance = swapper.factory().balance;
+        (uint256 previewAccounting, uint256 previewUnderlying, uint256 prevEthToFactory) = swapper.previewTake(amount);
         uint256 initialUnderlying = underlying.balanceOf(takerRecipient);
+        uint256 ethToFactory;
         if (seed % 2 == 1) {
             accounting.mint(taker1, previewAccounting);
             uint256 initialAccounting = accounting.balanceOf(taker1);
             vm.prank(taker1);
-            (accountingPaid, underlyingReceived) = swapper.fulfillOrder(amount, takerRecipient);
+            (accountingPaid, underlyingReceived, ethToFactory) = swapper.fulfillOrder(amount, takerRecipient);
             assertEq(accounting.balanceOf(taker1), initialAccounting - accountingPaid);
         } else {
             accounting.mint(taker2, previewAccounting);
             uint256 initialAccounting = accounting.balanceOf(taker2);
             vm.prank(taker2);
-            (accountingPaid, underlyingReceived) = swapper.fulfillOrder(amount, takerRecipient);
+            (accountingPaid, underlyingReceived, ethToFactory) = swapper.fulfillOrder(amount, takerRecipient);
             assertEq(accounting.balanceOf(taker2), initialAccounting - accountingPaid);
         }
         assertEq(previewUnderlying, underlyingReceived);
         assertEq(previewAccounting, accountingPaid);
+        assertEq(prevEthToFactory, ethToFactory);
+        assertEq(swapper.factory().balance, initialFactoryBalance + ethToFactory);
         assertEq(underlying.balanceOf(takerRecipient), initialUnderlying + underlyingReceived);
     }
 
