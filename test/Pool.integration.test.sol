@@ -76,8 +76,8 @@ contract Randomizer is Test {
         accounting.approve(address(swapper), type(uint256).max);
     }
 
+    // solhint-disable code-complexity
     function _createOrder(uint256 amount, uint256 price, uint256 stake, uint256 seed) internal returns (uint256) {
-        console2.log("_createOrder");
         // Creates a *valid* order, does not revert by itself
         // The creator of the order is random
         // Returns the index of the order
@@ -164,7 +164,6 @@ contract Randomizer is Test {
     }
 
     function _cancelOrder(uint256 index, uint256 price) internal {
-        console2.log("_cancelOrder");
         // Cancels an order only if it exists
         // If the order exists, it pranks the order offerer and cancels
         if (makerIndexes.length == 0) return; // (There is no index initialized yet so nothing to do)
@@ -198,7 +197,6 @@ contract Randomizer is Test {
         internal
         returns (uint256 accountingPaid, uint256 underlyingReceived)
     {
-        console2.log("_fulfillOrder");
         (uint256 previewAccounting, uint256 previewUnderlying) = swapper.previewTake(amount);
         uint256 initialUnderlying = underlying.balanceOf(takerRecipient);
         if (seed % 2 == 1) {
