@@ -65,7 +65,7 @@ contract Pool {
         uint256 indexed id,
         address indexed offerer,
         address indexed fulfiller,
-        uint256 accountingToTransfer,
+        uint256 staked,
         uint256 amount,
         uint256 price
     );
@@ -235,18 +235,22 @@ contract Pool {
         uint256 initialAmount = amount;
 
         while (amount >= order.underlyingAmount) {
-            uint256 toTransfer = convertToAccounting(order.underlyingAmount, price);
-            accounting.safeTransferFrom(msg.sender, order.recipient, toTransfer);
-            accountingToTransfer += toTransfer;
+            // Wrap toTransfer variable to avoid a stack too deep
+            {
+                uint256 toTransfer = convertToAccounting(order.underlyingAmount, price);
+                accounting.safeTransferFrom(msg.sender, order.recipient, toTransfer);
+                accountingToTransfer += toTransfer;
+            }
             _deleteNode(price, cursor);
             amount -= order.underlyingAmount;
-            cursor = order.next;
             if (order.staked > 0) {
                 (bool success, ) = factory.call{ value: order.staked }("");
                 ethToFactory += order.staked;
                 assert(success);
             }
 
+            emit OrderFulfilled(cursor, order.offerer, msg.sender, order.staked, order.underlyingAmount, price);
+            cursor = order.next;
             // in case the next is zero, we reached the end of all orders
             if (cursor == 0) break;
             order = orders[price][cursor];
@@ -262,8 +266,6 @@ contract Pool {
         }
 
         underlying.safeTransfer(receiver, initialAmount - amount);
-
-        emit OrderFulfilled(id[price], order.offerer, msg.sender, accountingToTransfer, initialAmount - amount, price);
 
         return (accountingToTransfer, initialAmount - amount, ethToFactory);
     }
