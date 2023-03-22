@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity =0.8.17;
 
-import { IPool, Pool } from "./Pool.sol";
+import { IFactory } from "./interfaces/IFactory.sol";
+import { IPool } from "./interfaces/IPool.sol";
+import { Pool } from "./Pool.sol";
 
 contract Router {
     struct OrderData {
@@ -15,14 +17,13 @@ contract Router {
         uint256 deadline;
     }
 
-    address public immutable factory;
-    bytes32 internal constant POOL_INIT_CODE_HASH = keccak256(type(Pool).creationCode);
+    IFactory public immutable factory;
 
     error StaleTransaction();
     error AmountTooLow();
 
     constructor(address _factory) {
-        factory = _factory;
+        factory = IFactory(_factory);
     }
 
     modifier checkDeadline(uint256 deadline) {
@@ -31,16 +32,7 @@ contract Router {
     }
 
     function getPool(address underlying, address accounting, uint16 tick) internal view returns (IPool) {
-        bytes32 _data = keccak256(
-            abi.encodePacked(
-                bytes1(0xff),
-                factory,
-                keccak256(abi.encode(underlying, accounting, tick)),
-                POOL_INIT_CODE_HASH
-            )
-        );
-
-        return IPool(address(bytes20(_data << 96)));
+        return IPool(factory.pools(underlying, accounting, tick));
     }
 
     function createOrder(OrderData calldata order) external payable checkDeadline(order.deadline) {
