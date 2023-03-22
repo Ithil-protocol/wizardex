@@ -67,8 +67,10 @@ contract Pool {
         address indexed fulfiller,
         uint256 staked,
         uint256 amount,
-        uint256 price
+        uint256 price,
+        bool totalFill
     );
+
     event OrderCancelled(uint256 indexed id, address indexed offerer, uint256 price, uint256 underlyingToTransfer);
 
     error RestrictedToOwner();
@@ -249,7 +251,7 @@ contract Pool {
                 assert(success);
             }
 
-            emit OrderFulfilled(cursor, order.offerer, msg.sender, order.staked, order.underlyingAmount, price);
+            emit OrderFulfilled(cursor, order.offerer, msg.sender, order.staked, order.underlyingAmount, price, true);
             cursor = order.next;
             // in case the next is zero, we reached the end of all orders
             if (cursor == 0) break;
@@ -257,11 +259,15 @@ contract Pool {
         }
 
         if (amount > 0 && cursor != 0) {
-            uint256 toTransfer = convertToAccounting(amount, price);
-            accounting.safeTransferFrom(msg.sender, order.recipient, toTransfer);
-            accountingToTransfer += toTransfer;
+            // Wrap toTransfer variable to avoid a stack too deep
+            {
+                uint256 toTransfer = convertToAccounting(amount, price);
+                accounting.safeTransferFrom(msg.sender, order.recipient, toTransfer);
+                accountingToTransfer += toTransfer;
+            }
             orders[price][cursor].underlyingAmount -= amount;
 
+            emit OrderFulfilled(cursor, order.offerer, msg.sender, order.staked, amount, price, false);
             amount = 0;
         }
 
