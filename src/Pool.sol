@@ -65,7 +65,6 @@ contract Pool {
         uint256 indexed id,
         address indexed offerer,
         address indexed fulfiller,
-        uint256 staked,
         uint256 amount,
         uint256 price,
         bool totalFill
@@ -251,7 +250,7 @@ contract Pool {
                 assert(success);
             }
 
-            emit OrderFulfilled(cursor, order.offerer, msg.sender, order.staked, order.underlyingAmount, price, true);
+            emit OrderFulfilled(cursor, order.offerer, msg.sender, order.underlyingAmount, price, true);
             cursor = order.next;
             // in case the next is zero, we reached the end of all orders
             if (cursor == 0) break;
@@ -267,7 +266,7 @@ contract Pool {
             }
             orders[price][cursor].underlyingAmount -= amount;
 
-            emit OrderFulfilled(cursor, order.offerer, msg.sender, order.staked, amount, price, false);
+            emit OrderFulfilled(cursor, order.offerer, msg.sender, amount, price, false);
             amount = 0;
         }
 
