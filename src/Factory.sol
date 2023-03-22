@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity =0.8.17;
 
-import { Pool } from "./Pool.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { Pool } from "./Pool.sol";
 
 contract Factory is Ownable {
-    // underlying => accounting => pool address
-    mapping(address => mapping(address => mapping(uint256 => address))) public pools;
-
+    // underlying => accounting => tick => pool address
+    mapping(address => mapping(address => mapping(uint16 => address))) public pools;
     mapping(uint16 => bool) public tickSupported;
 
     event NewPool(address indexed underlying, address indexed accounting, uint256 indexed tickSpacing);
+    event TickToggled(uint16 tick, bool status);
 
     constructor() {
         tickSupported[1] = true;
@@ -18,8 +18,10 @@ contract Factory is Ownable {
         tickSupported[10] = true;
     }
 
-    function supportTick(uint16 tick) external onlyOwner {
-        tickSupported[tick] = true;
+    function toggleSupportedTick(uint16 tick) external onlyOwner {
+        tickSupported[tick] = !tickSupported[tick];
+
+        emit TickToggled(tick, tickSupported[tick]);
     }
 
     function sweep(address to) external onlyOwner {
