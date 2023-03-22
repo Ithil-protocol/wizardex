@@ -4,10 +4,13 @@ pragma solidity =0.8.17;
 import { IPool, Pool } from "./Pool.sol";
 
 contract Router {
-    struct OrderData {
+    struct PoolData {
         address underlying;
         address accounting;
         uint16 tick;
+    }
+
+    struct OrderData {
         address recipient;
         uint256 amount;
         uint256 amountOutMinimum;
@@ -43,21 +46,24 @@ contract Router {
         return IPool(address(bytes20(_data << 96)));
     }
 
-    function createOrder(OrderData calldata order) external payable checkDeadline(order.deadline) {
-        getPool(order.underlying, order.accounting, order.tick).createOrder{ value: msg.value }(
+    function createOrder(PoolData calldata pool, OrderData calldata order)
+        external
+        payable
+        checkDeadline(order.deadline)
+    {
+        getPool(pool.underlying, pool.accounting, pool.tick).createOrder{ value: msg.value }(
             order.amount,
             order.price,
             order.recipient
         );
     }
 
-    function cancelOrder(OrderData calldata order, uint256 index) external {
-        // TODO get the index somehow
-        getPool(order.underlying, order.accounting, order.tick).cancelOrder(index, order.price);
+    function cancelOrder(PoolData calldata pool, uint256 index, uint256 price) external {
+        getPool(pool.underlying, pool.accounting, pool.tick).cancelOrder(index, price);
     }
 
-    function fulfillOrder(OrderData calldata order) external checkDeadline(order.deadline) {
-        (, uint256 amountOut) = getPool(order.underlying, order.accounting, order.tick).fulfillOrder(
+    function fulfillOrder(PoolData calldata pool, OrderData calldata order) external checkDeadline(order.deadline) {
+        (, uint256 amountOut) = getPool(pool.underlying, pool.accounting, pool.tick).fulfillOrder(
             order.amount,
             order.recipient
         );
