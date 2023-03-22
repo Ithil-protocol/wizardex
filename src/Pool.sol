@@ -53,20 +53,22 @@ contract Pool is IPool {
     event OrderCreated(
         address indexed offerer,
         uint256 price,
-        uint256 index,
+        uint256 indexed index,
         uint256 underlyingAmount,
         uint256 staked,
         uint256 previous,
         uint256 next
     );
     event OrderFulfilled(
+        uint256 indexed id,
         address indexed offerer,
         address indexed fulfiller,
-        uint256 accountingToTransfer,
         uint256 amount,
-        uint256 price
+        uint256 price,
+        bool totalFill
     );
-    event OrderCancelled(address indexed offerer, uint256 index, uint256 price, uint256 underlyingToTransfer);
+
+    event OrderCancelled(uint256 indexed id, address indexed offerer, uint256 price, uint256 underlyingToTransfer);
 
     error RestrictedToOwner();
     error IncorrectTickSpacing();
@@ -192,7 +194,7 @@ contract Pool is IPool {
             assert(success);
         }
 
-        emit OrderCancelled(order.offerer, index, price, order.underlyingAmount);
+        emit OrderCancelled(index, order.offerer, price, order.underlyingAmount);
     }
 
     // amount is always of underlying currency
@@ -222,34 +224,40 @@ contract Pool is IPool {
         uint256 initialAmount = amount;
 
         while (amount >= order.underlyingAmount) {
-            uint256 toTransfer = convertToAccounting(order.underlyingAmount, price);
-            accounting.safeTransferFrom(msg.sender, order.recipient, toTransfer);
-            accountingToTransfer += toTransfer;
+            // Wrap toTransfer variable to avoid a stack too deep
+            {
+                uint256 toTransfer = convertToAccounting(order.underlyingAmount, price);
+                accounting.safeTransferFrom(msg.sender, order.recipient, toTransfer);
+                accountingToTransfer += toTransfer;
+            }
             _deleteNode(price, cursor);
             amount -= order.underlyingAmount;
-            cursor = order.next;
             if (order.staked > 0) {
                 (bool success, ) = factory.call{ value: order.staked }("");
                 assert(success);
             }
 
+            emit OrderFulfilled(cursor, order.offerer, msg.sender, order.underlyingAmount, price, true);
+            cursor = order.next;
             // in case the next is zero, we reached the end of all orders
             if (cursor == 0) break;
             order = orders[price][cursor];
         }
 
         if (amount > 0 && cursor != 0) {
-            uint256 toTransfer = convertToAccounting(amount, price);
-            accounting.safeTransferFrom(msg.sender, order.recipient, toTransfer);
-            accountingToTransfer += toTransfer;
+            // Wrap toTransfer variable to avoid a stack too deep
+            {
+                uint256 toTransfer = convertToAccounting(amount, price);
+                accounting.safeTransferFrom(msg.sender, order.recipient, toTransfer);
+                accountingToTransfer += toTransfer;
+            }
             orders[price][cursor].underlyingAmount -= amount;
 
+            emit OrderFulfilled(cursor, order.offerer, msg.sender, amount, price, false);
             amount = 0;
         }
 
         underlying.safeTransfer(receiver, initialAmount - amount);
-
-        emit OrderFulfilled(order.offerer, msg.sender, accountingToTransfer, initialAmount - amount, price);
 
         return (accountingToTransfer, initialAmount - amount);
     }
