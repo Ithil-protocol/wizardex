@@ -78,6 +78,8 @@ contract Pool {
     error WrongIndex();
     error PriceTooHigh();
     error AmountTooHigh();
+    error StaleOrder();
+    error AmountOutTooLow();
 
     constructor(address _underlying, address _accounting, uint16 _tick) {
         factory = msg.sender;
@@ -87,6 +89,11 @@ contract Pool {
         tick = _tick;
         maximumPrice = type(uint256).max / (10000 + tick);
         maximumAmount = type(uint256).max / priceResolution;
+    }
+
+    modifier checkDeadline(uint256 deadline) {
+        if (block.timestamp > deadline) revert StaleOrder();
+        _;
     }
 
     // Example WETH / USDC, maker USDC, taker WETH
@@ -173,7 +180,11 @@ contract Pool {
     }
 
     // Add a node to the list
-    function createOrder(uint256 amount, uint256 price, address recipient) external payable {
+    function createOrder(uint256 amount, uint256 price, address recipient, uint256 deadline)
+        external
+        payable
+        checkDeadline(deadline)
+    {
         if (amount == 0 || price == 0) revert NullAmount();
         if (price > maximumPrice) revert PriceTooHigh();
         if (amount > maximumAmount) revert AmountTooHigh();
@@ -200,7 +211,11 @@ contract Pool {
     }
 
     // amount is always of underlying currency
-    function fulfillOrder(uint256 amount, address receiver) external returns (uint256, uint256, uint256) {
+    function fulfillOrder(uint256 amount, address receiver, uint256 minAmountOut, uint256 deadline)
+        external
+        checkDeadline(deadline)
+        returns (uint256, uint256, uint256)
+    {
         uint256 accountingToPay = 0;
         uint256 ethToFactory = 0;
         uint256 initialAmount = amount;
@@ -219,6 +234,7 @@ contract Pool {
             if (amount > 0) priceLevels[0] = priceLevels[priceLevels[0]];
         }
 
+        if (initialAmount - amount < minAmountOut) revert AmountOutTooLow();
         return (accountingToPay, initialAmount - amount, ethToFactory);
     }
 

@@ -108,14 +108,14 @@ contract Randomizer is Test {
             }
             underlying.mint(maker1, amount);
             vm.prank(maker1);
-            swapper.createOrder{ value: stake }(amount, price, makerRecipient);
+            swapper.createOrder{ value: stake }(amount, price, makerRecipient, block.timestamp + 1000);
         } else {
             if (stake > 0) {
                 vm.deal(maker2, stake);
             }
             underlying.mint(maker2, amount);
             vm.prank(maker2);
-            swapper.createOrder{ value: stake }(amount, price, makerRecipient);
+            swapper.createOrder{ value: stake }(amount, price, makerRecipient, block.timestamp + 1000);
         }
         makerIndexes.push(swapper.id(price));
 
@@ -205,13 +205,23 @@ contract Randomizer is Test {
             accounting.mint(taker1, previewAccounting);
             uint256 initialAccounting = accounting.balanceOf(taker1);
             vm.prank(taker1);
-            (accountingPaid, underlyingReceived, ethToFactory) = swapper.fulfillOrder(amount, takerRecipient);
+            (accountingPaid, underlyingReceived, ethToFactory) = swapper.fulfillOrder(
+                amount,
+                takerRecipient,
+                0,
+                block.timestamp + 1000
+            );
             assertEq(accounting.balanceOf(taker1), initialAccounting - accountingPaid);
         } else {
             accounting.mint(taker2, previewAccounting);
             uint256 initialAccounting = accounting.balanceOf(taker2);
             vm.prank(taker2);
-            (accountingPaid, underlyingReceived, ethToFactory) = swapper.fulfillOrder(amount, takerRecipient);
+            (accountingPaid, underlyingReceived, ethToFactory) = swapper.fulfillOrder(
+                amount,
+                takerRecipient,
+                0,
+                block.timestamp + 1000
+            );
             assertEq(accounting.balanceOf(taker2), initialAccounting - accountingPaid);
         }
         assertEq(previewUnderlying, underlyingReceived);
