@@ -7,12 +7,7 @@ import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { Test } from "forge-std/Test.sol";
 import { Factory } from "../src/Factory.sol";
 import { Pool } from "../src/Pool.sol";
-
-import { console2 } from "forge-std/console2.sol";
-
-contract Wallet {
-    receive() external payable {}
-}
+import { Wallet } from "./Wallet.sol";
 
 contract PoolUnitTest is Test {
     Factory internal immutable factory;
@@ -77,7 +72,7 @@ contract PoolUnitTest is Test {
         if (stake > 0) {
             vm.deal(maker, stake);
         }
-        swapper.createOrder{ value: stake }(amount, price, maker);
+        swapper.createOrder{ value: stake }(amount, price, maker, block.timestamp + 1000);
         vm.stopPrank();
 
         assertEq(swapper.id(price), initialLastIndex + 1);
@@ -113,14 +108,19 @@ contract PoolUnitTest is Test {
         uint256 index;
         (amountMade, price, index) = testCreateOrder(amountMade, price, stake);
 
-        (uint256 accountingToPay, uint256 prevUnd, ) = swapper.previewTake(amountTaken);
+        (uint256 accountingToPay, uint256 prevUnd) = swapper.previewTake(amountTaken);
         uint256 underlyingTaken;
         uint256 accountingTransfered;
 
         token1.mint(taker, accountingToPay);
 
         vm.startPrank(taker);
-        (accountingTransfered, underlyingTaken, ) = swapper.fulfillOrder(amountTaken, address(this));
+        (accountingTransfered, underlyingTaken) = swapper.fulfillOrder(
+            amountTaken,
+            address(this),
+            0,
+            block.timestamp + 1000
+        );
         assertEq(underlyingTaken, prevUnd);
         vm.stopPrank();
 
@@ -155,46 +155,62 @@ contract PoolUnitTest is Test {
             assertEq(token1.balanceOf(maker), initialAccBalance + accountingTransfered);
             assertEq(token0.balanceOf(address(this)), initialThisBalance + amountMade);
         } else {
-            (
-                address transformedOwner,
-                ,
-                uint256 transformedAmount,
-                ,
-                uint256 transformedPrevious,
-                uint256 transformedNext
-            ) = swapper.orders(price, madeIndex);
+            swapper.orders(price, madeIndex);
             vm.prank(maker);
             swapper.cancelOrder(madeIndex, price);
             assertEq(token0.balanceOf(maker), initialUndBalance + quotedUnd);
         }
     }
 
-    function testFirstInFirstOut(uint256 made1, uint256 made2, uint256 taken, uint256 price) public {
+    function testFirstInFirstOut(uint256 made1, uint256 made2, uint256 taken, uint256 price, uint256 minAmountOut)
+        public
+    {
         vm.assume(made1 > 0);
         vm.assume(made2 > 0);
         // do not allow absurdely high prices that cause overflows
         /// vm.assume(price < type(uint256).max / token1.balanceOf(taker));
-
-        uint256 initialtoken1Balance = token1.balanceOf(maker);
-        uint256 initialtoken0Balance = token0.balanceOf(taker);
-
+        uint256 underlyingToTransfer;
+        uint256 accountingToTransfer;
         uint256 index1;
         uint256 index2;
-        (made1, price, index1) = testCreateOrder(made1, price, 0);
-        made2 = token0.balanceOf(maker) == 0 ? 0 : made2 % token0.balanceOf(maker);
-        (made2, price, index2) = testCreateOrder(made2, price, 0);
+        uint256 prevAcc1;
+        uint256 prevAcc2;
+        {
+            uint256 initialtoken1Balance = token1.balanceOf(maker);
+            uint256 initialtoken0Balance = token0.balanceOf(taker);
+            (made1, price, index1) = testCreateOrder(made1, price, 0);
+            made2 = token0.balanceOf(maker) == 0 ? 0 : made2 % token0.balanceOf(maker);
+            (made2, price, index2) = testCreateOrder(made2, price, 0);
 
-        // Taker can afford to take
-        uint256 maxTaken = swapper.convertToUnderlying(token1.balanceOf(taker), price);
-        taken = maxTaken == 0 ? 0 : taken % maxTaken;
+            // Taker can afford to take
+            uint256 maxTaken = swapper.convertToUnderlying(token1.balanceOf(taker), price);
+            taken = maxTaken == 0 ? 0 : taken % maxTaken;
 
-        vm.prank(taker);
-        (uint256 accountingToTransfer, uint256 underlyingToTransfer, ) = swapper.fulfillOrder(taken, taker);
-        assertEq(token1.balanceOf(maker), initialtoken1Balance + accountingToTransfer);
-        assertEq(token0.balanceOf(taker), initialtoken0Balance + underlyingToTransfer);
-
-        uint256 prevAcc1 = swapper.previewRedeem(index1, price);
-        uint256 prevAcc2 = swapper.previewRedeem(index2, price);
+            prevAcc1 = swapper.previewRedeem(index1, price);
+            prevAcc2 = swapper.previewRedeem(index2, price);
+            (, uint256 prevTake) = swapper.previewTake(taken);
+            if (prevTake >= minAmountOut) {
+                vm.prank(taker);
+                (accountingToTransfer, underlyingToTransfer) = swapper.fulfillOrder(
+                    taken,
+                    taker,
+                    minAmountOut,
+                    block.timestamp + 1000
+                );
+            } else {
+                vm.startPrank(taker);
+                vm.expectRevert(bytes4(keccak256(abi.encodePacked("AmountOutTooLow()"))));
+                (accountingToTransfer, underlyingToTransfer) = swapper.fulfillOrder(
+                    taken,
+                    taker,
+                    minAmountOut,
+                    block.timestamp + 1000
+                );
+                vm.stopPrank();
+            }
+            assertEq(token1.balanceOf(maker), initialtoken1Balance + accountingToTransfer);
+            assertEq(token0.balanceOf(taker), initialtoken0Balance + underlyingToTransfer);
+        }
 
         if (underlyingToTransfer < made1) {
             // The second order is not filled, thus its redeem is totally in underlying

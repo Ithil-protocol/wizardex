@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity =0.8.17;
 
-import { IERC20, ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import { IERC20, IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
+import { IPool } from "./interfaces/IPool.sol";
 
-contract Pool {
-    using SafeERC20 for ERC20;
+contract Pool is IPool {
+    using SafeERC20 for IERC20;
     using Math for uint256;
 
     // We model makers as a circular doubly linked list with zero as first and last element
@@ -20,20 +21,17 @@ contract Pool {
         uint256 next;
     }
 
-    address public immutable factory;
-
     // Mapping from higher to lower
     // By convention, priceLevels[0] is the highest bid;
     mapping(uint256 => uint256) public priceLevels;
 
+    address public immutable factory;
     // Makers provide underlying and get accounting after match
     // Takers sell accounting and get underlying immediately
-    ERC20 public immutable accounting;
-    ERC20 public immutable underlying;
-
+    IERC20 public immutable accounting;
+    IERC20 public immutable underlying;
     // the accounting token decimals (stored to save gas)
     uint256 public immutable priceResolution;
-
     // maximum price to prevent overflow (computed at construction to save gas)
     uint256 public immutable maximumPrice;
     // maximum amount to prevent overflow (computed at construction to save gas)
@@ -78,15 +76,22 @@ contract Pool {
     error WrongIndex();
     error PriceTooHigh();
     error AmountTooHigh();
+    error StaleOrder();
+    error AmountOutTooLow();
 
     constructor(address _underlying, address _accounting, uint16 _tick) {
         factory = msg.sender;
-        accounting = ERC20(_accounting);
-        priceResolution = 10**accounting.decimals();
-        underlying = ERC20(_underlying);
+        accounting = IERC20(_accounting);
+        priceResolution = 10**IERC20Metadata(_accounting).decimals();
+        underlying = IERC20(_underlying);
         tick = _tick;
         maximumPrice = type(uint256).max / (10000 + tick);
         maximumAmount = type(uint256).max / priceResolution;
+    }
+
+    modifier checkDeadline(uint256 deadline) {
+        if (block.timestamp > deadline) revert StaleOrder();
+        _;
     }
 
     // Example WETH / USDC, maker USDC, taker WETH
@@ -173,7 +178,11 @@ contract Pool {
     }
 
     // Add a node to the list
-    function createOrder(uint256 amount, uint256 price, address recipient) external payable {
+    function createOrder(uint256 amount, uint256 price, address recipient, uint256 deadline)
+        external
+        payable
+        checkDeadline(deadline)
+    {
         if (amount == 0 || price == 0) revert NullAmount();
         if (price > maximumPrice) revert PriceTooHigh();
         if (amount > maximumAmount) revert AmountTooHigh();
@@ -183,7 +192,7 @@ contract Pool {
         emit OrderCreated(msg.sender, price, id[price], amount, msg.value, previous, next);
     }
 
-    function cancelOrder(uint256 index, uint256 price) external {
+    function cancelOrder(uint256 index, uint256 price) external override {
         Order memory order = orders[price][index];
         if (order.offerer != msg.sender) revert RestrictedToOwner();
 
@@ -200,39 +209,34 @@ contract Pool {
     }
 
     // amount is always of underlying currency
-    function fulfillOrder(uint256 amount, address receiver) external returns (uint256, uint256, uint256) {
+    function fulfillOrder(uint256 amount, address receiver, uint256 minAmountOut, uint256 deadline)
+        external
+        checkDeadline(deadline)
+        returns (uint256, uint256)
+    {
         uint256 accountingToPay = 0;
-        uint256 ethToFactory = 0;
         uint256 initialAmount = amount;
         while (amount > 0 && priceLevels[0] != 0) {
-            (uint256 payStep, uint256 underlyingReceived, uint256 partialEthToFactory) = fulfillOrderByPrice(
-                amount,
-                priceLevels[0],
-                receiver
-            );
+            (uint256 payStep, uint256 underlyingReceived) = _fulfillOrderByPrice(amount, priceLevels[0], receiver);
             // underlyingPaid <= amount
             unchecked {
                 amount -= underlyingReceived;
             }
             accountingToPay += payStep;
-            ethToFactory += partialEthToFactory;
             if (amount > 0) priceLevels[0] = priceLevels[priceLevels[0]];
         }
 
-        return (accountingToPay, initialAmount - amount, ethToFactory);
+        if (initialAmount - amount < minAmountOut) revert AmountOutTooLow();
+        return (accountingToPay, initialAmount - amount);
     }
 
     // amount is always of underlying currency
-    function fulfillOrderByPrice(uint256 amount, uint256 price, address receiver)
-        internal
-        returns (uint256, uint256, uint256)
-    {
+    function _fulfillOrderByPrice(uint256 amount, uint256 price, address receiver) internal returns (uint256, uint256) {
         uint256 cursor = orders[price][0].next;
-        if (cursor == 0) return (0, 0, 0);
+        if (cursor == 0) return (0, 0);
         Order memory order = orders[price][cursor];
 
         uint256 accountingToTransfer = 0;
-        uint256 ethToFactory = 0;
         uint256 initialAmount = amount;
 
         while (amount >= order.underlyingAmount) {
@@ -246,7 +250,6 @@ contract Pool {
             amount -= order.underlyingAmount;
             if (order.staked > 0) {
                 (bool success, ) = factory.call{ value: order.staked }("");
-                ethToFactory += order.staked;
                 assert(success);
             }
 
@@ -272,45 +275,38 @@ contract Pool {
 
         underlying.safeTransfer(receiver, initialAmount - amount);
 
-        return (accountingToTransfer, initialAmount - amount, ethToFactory);
+        return (accountingToTransfer, initialAmount - amount);
     }
 
     // amount is always of underlying currency
-    function previewTake(uint256 amount) external view returns (uint256, uint256, uint256) {
+    function previewTake(uint256 amount) external view returns (uint256, uint256) {
         uint256 accountingToPay = 0;
         uint256 initialAmount = amount;
-        uint256 ethToFactory = 0;
         uint256 price = priceLevels[0];
         while (amount > 0 && price != 0) {
-            (uint256 payStep, uint256 underlyingReceived, uint256 partialEthToFactory) = previewTakeByPrice(
-                amount,
-                price
-            );
+            (uint256 payStep, uint256 underlyingReceived) = previewTakeByPrice(amount, price);
             // underlyingPaid <= amount
             unchecked {
                 amount -= underlyingReceived;
             }
             accountingToPay += payStep;
-            ethToFactory += partialEthToFactory;
             if (amount > 0) price = priceLevels[price];
         }
 
-        return (accountingToPay, initialAmount - amount, ethToFactory);
+        return (accountingToPay, initialAmount - amount);
     }
 
     // View function to calculate how much accounting the taker needs to take amount
-    function previewTakeByPrice(uint256 amount, uint256 price) internal view returns (uint256, uint256, uint256) {
+    function previewTakeByPrice(uint256 amount, uint256 price) internal view returns (uint256, uint256) {
         uint256 cursor = orders[price][0].next;
-        if (cursor == 0) return (0, 0, 0);
+        if (cursor == 0) return (0, 0);
         Order memory order = orders[price][cursor];
 
-        uint256 ethToFactory = 0;
         uint256 accountingToTransfer = 0;
         uint256 initialAmount = amount;
         while (amount >= order.underlyingAmount) {
             uint256 toTransfer = convertToAccounting(order.underlyingAmount, price);
             accountingToTransfer += toTransfer;
-            ethToFactory += order.staked;
             amount -= order.underlyingAmount;
             cursor = order.next;
             // in case the next is zero, we reached the end of all orders
@@ -324,7 +320,7 @@ contract Pool {
             amount = 0;
         }
 
-        return (accountingToTransfer, initialAmount - amount, ethToFactory);
+        return (accountingToTransfer, initialAmount - amount);
     }
 
     // View function to calculate how much accounting and underlying a redeem would return

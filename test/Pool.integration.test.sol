@@ -1,17 +1,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity =0.8.17;
 
+import { ERC20PresetMinterPauser } from "@openzeppelin/contracts/token/ERC20/presets/ERC20PresetMinterPauser.sol";
 import { Test } from "forge-std/Test.sol";
 import { Pool } from "../src/Pool.sol";
 import { Factory } from "../src/Factory.sol";
 import { PoolUnitTest } from "./Pool.unit.test.sol";
-import { ERC20PresetMinterPauser } from "@openzeppelin/contracts/token/ERC20/presets/ERC20PresetMinterPauser.sol";
-
-import { console2 } from "forge-std/console2.sol";
-
-contract Wallet {
-    receive() external payable {}
-}
+import { Wallet } from "./Wallet.sol";
 
 contract Randomizer is Test {
     Factory internal immutable factory;
@@ -108,14 +103,14 @@ contract Randomizer is Test {
             }
             underlying.mint(maker1, amount);
             vm.prank(maker1);
-            swapper.createOrder{ value: stake }(amount, price, makerRecipient);
+            swapper.createOrder{ value: stake }(amount, price, makerRecipient, block.timestamp + 1000);
         } else {
             if (stake > 0) {
                 vm.deal(maker2, stake);
             }
             underlying.mint(maker2, amount);
             vm.prank(maker2);
-            swapper.createOrder{ value: stake }(amount, price, makerRecipient);
+            swapper.createOrder{ value: stake }(amount, price, makerRecipient, block.timestamp + 1000);
         }
         makerIndexes.push(swapper.id(price));
 
@@ -197,27 +192,35 @@ contract Randomizer is Test {
         internal
         returns (uint256 accountingPaid, uint256 underlyingReceived)
     {
-        uint256 initialFactoryBalance = swapper.factory().balance;
-        (uint256 previewAccounting, uint256 previewUnderlying, uint256 prevEthToFactory) = swapper.previewTake(amount);
+        (uint256 previewAccounting, uint256 previewUnderlying) = swapper.previewTake(amount);
         uint256 initialUnderlying = underlying.balanceOf(takerRecipient);
-        uint256 ethToFactory;
         if (seed % 2 == 1) {
             accounting.mint(taker1, previewAccounting);
             uint256 initialAccounting = accounting.balanceOf(taker1);
             vm.prank(taker1);
-            (accountingPaid, underlyingReceived, ethToFactory) = swapper.fulfillOrder(amount, takerRecipient);
+            (accountingPaid, underlyingReceived) = swapper.fulfillOrder(
+                amount,
+                takerRecipient,
+                0,
+                block.timestamp + 1000
+            );
             assertEq(accounting.balanceOf(taker1), initialAccounting - accountingPaid);
         } else {
             accounting.mint(taker2, previewAccounting);
             uint256 initialAccounting = accounting.balanceOf(taker2);
             vm.prank(taker2);
-            (accountingPaid, underlyingReceived, ethToFactory) = swapper.fulfillOrder(amount, takerRecipient);
+            (accountingPaid, underlyingReceived) = swapper.fulfillOrder(
+                amount,
+                takerRecipient,
+                0,
+                block.timestamp + 1000
+            );
             assertEq(accounting.balanceOf(taker2), initialAccounting - accountingPaid);
         }
         assertEq(previewUnderlying, underlyingReceived);
         assertEq(previewAccounting, accountingPaid);
-        assertEq(prevEthToFactory, ethToFactory);
-        assertEq(swapper.factory().balance, initialFactoryBalance + ethToFactory);
+        //assertEq(prevEthToFactory, ethToFactory);
+        //assertEq(swapper.factory().balance, initialFactoryBalance + ethToFactory);
         assertEq(underlying.balanceOf(takerRecipient), initialUnderlying + underlyingReceived);
     }
 
@@ -230,7 +233,7 @@ contract Randomizer is Test {
         if (seed % 3 == 2) (accountingPaid, underlyingReceived) = _fulfillOrder(amount, seed);
     }
 
-    function _modifyAmount(uint256 amount, uint256 seed) internal returns (uint256) {
+    function _modifyAmount(uint256 amount, uint256 seed) internal pure returns (uint256) {
         // A fairly crazy random number generator based on keccak256 and large primes
         uint256[8] memory bigPrimes;
         bigPrimes[0] = 2; // 2
@@ -257,6 +260,7 @@ contract Randomizer is Test {
             // This number could be zero and can overflow, so we increment by one and take modulus at *every* iteration
             modifiedAmount = 1 + (modifiedAmount % bigPrimes[i]);
         }
+
         return modifiedAmount;
     }
 }
