@@ -103,6 +103,7 @@ contract Randomizer is Test {
             }
             underlying.mint(maker1, amount);
             vm.prank(maker1);
+            // slither-disable-next-line arbitrary-send-eth
             swapper.createOrder{ value: stake }(amount, price, makerRecipient, block.timestamp + 1000);
         } else {
             if (stake > 0) {
@@ -110,6 +111,7 @@ contract Randomizer is Test {
             }
             underlying.mint(maker2, amount);
             vm.prank(maker2);
+            // slither-disable-next-line arbitrary-send-eth
             swapper.createOrder{ value: stake }(amount, price, makerRecipient, block.timestamp + 1000);
         }
         makerIndexes.push(swapper.id(price));
