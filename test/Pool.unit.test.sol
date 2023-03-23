@@ -230,14 +230,14 @@ contract PoolUnitTest is Test {
     }
 
     function testSweep(uint256 amountMade, uint256 amountTaken, uint256 price, uint256 stake) public {
-        address wallet = address(new Wallet());
+        Wallet wallet = new Wallet();
         testFulfillOrder(amountMade, amountTaken, price, stake);
         uint256 initialFactoryBalance = address(factory).balance;
-        uint256 initialWalletBalance = wallet.balance;
+        uint256 initialWalletBalance = wallet.balance();
 
-        factory.sweep(wallet);
+        factory.sweep(address(wallet));
 
-        assertEq(wallet.balance, initialWalletBalance + initialFactoryBalance);
+        assertEq(wallet.balance(), initialWalletBalance + initialFactoryBalance);
         assertEq(address(factory).balance, 0);
     }
 }
