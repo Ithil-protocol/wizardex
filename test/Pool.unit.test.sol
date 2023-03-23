@@ -9,6 +9,8 @@ import { Factory } from "../src/Factory.sol";
 import { Pool } from "../src/Pool.sol";
 import { Wallet } from "./Wallet.sol";
 
+import { console2 } from "forge-std/console2.sol";
+
 contract PoolUnitTest is Test {
     Factory internal immutable factory;
     Pool internal immutable swapper;
@@ -225,5 +227,17 @@ contract PoolUnitTest is Test {
             assertEq(prevAcc1, 0);
             assertEq(prevAcc2, made2 - (underlyingToTransfer - made1));
         }
+    }
+
+    function testSweep(uint256 amountMade, uint256 amountTaken, uint256 price, uint256 stake) public {
+        address wallet = address(new Wallet());
+        testFulfillOrder(amountMade, amountTaken, price, stake);
+        uint256 initialFactoryBalance = address(factory).balance;
+        uint256 initialWalletBalance = wallet.balance;
+
+        factory.sweep(wallet);
+
+        assertEq(wallet.balance, initialWalletBalance + initialFactoryBalance);
+        assertEq(address(factory).balance, 0);
     }
 }
