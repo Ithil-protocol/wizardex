@@ -236,41 +236,44 @@ contract Pool is IPool {
         if (cursor == 0) return (0, 0);
         Order memory order = orders[price][cursor];
 
+        uint256 totalStake = 0;
         uint256 accountingToTransfer = 0;
         uint256 initialAmount = amount;
 
         while (amount >= order.underlyingAmount) {
+            _deleteNode(price, cursor);
+            amount -= order.underlyingAmount;
+            cursor = order.next;
             // Wrap toTransfer variable to avoid a stack too deep
             {
                 uint256 toTransfer = convertToAccounting(order.underlyingAmount, price);
                 accounting.safeTransferFrom(msg.sender, order.recipient, toTransfer);
                 accountingToTransfer += toTransfer;
-            }
-            _deleteNode(price, cursor);
-            amount -= order.underlyingAmount;
-            if (order.staked > 0) {
-                (bool success, ) = factory.call{ value: order.staked }("");
-                assert(success);
+                totalStake += order.staked;
             }
 
             emit OrderFulfilled(cursor, order.offerer, msg.sender, order.underlyingAmount, price, true);
-            cursor = order.next;
             // in case the next is zero, we reached the end of all orders
             if (cursor == 0) break;
             order = orders[price][cursor];
         }
 
         if (amount > 0 && cursor != 0) {
+            orders[price][cursor].underlyingAmount -= amount;
             // Wrap toTransfer variable to avoid a stack too deep
             {
                 uint256 toTransfer = convertToAccounting(amount, price);
                 accounting.safeTransferFrom(msg.sender, order.recipient, toTransfer);
                 accountingToTransfer += toTransfer;
             }
-            orders[price][cursor].underlyingAmount -= amount;
 
             emit OrderFulfilled(cursor, order.offerer, msg.sender, amount, price, false);
             amount = 0;
+        }
+
+        if (totalStake > 0) {
+            (bool success, ) = factory.call{ value: totalStake }("");
+            assert(success);
         }
 
         underlying.safeTransfer(receiver, initialAmount - amount);
