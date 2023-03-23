@@ -3,7 +3,6 @@ pragma solidity =0.8.17;
 
 import { IERC20, IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { ERC20PresetMinterPauser } from "@openzeppelin/contracts/token/ERC20/presets/ERC20PresetMinterPauser.sol";
-import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { Test } from "forge-std/Test.sol";
 import { Factory } from "../src/Factory.sol";
 import { Pool } from "../src/Pool.sol";
@@ -225,5 +224,17 @@ contract PoolUnitTest is Test {
             assertEq(prevAcc1, 0);
             assertEq(prevAcc2, made2 - (underlyingToTransfer - made1));
         }
+    }
+
+    function testSweep(uint256 amountMade, uint256 amountTaken, uint256 price, uint256 stake) public {
+        Wallet wallet = new Wallet();
+        testFulfillOrder(amountMade, amountTaken, price, stake);
+        uint256 initialFactoryBalance = address(factory).balance;
+        uint256 initialWalletBalance = wallet.balance();
+
+        factory.sweep(address(wallet));
+
+        assertEq(wallet.balance(), initialWalletBalance + initialFactoryBalance);
+        assertEq(address(factory).balance, 0);
     }
 }
