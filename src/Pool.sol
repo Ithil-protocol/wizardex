@@ -272,6 +272,7 @@ contract Pool is IPool {
         }
 
         if (totalStake > 0) {
+            // slither-disable-next-line arbitrary-send-eth
             (bool success, ) = factory.call{ value: totalStake }("");
             assert(success);
         }
