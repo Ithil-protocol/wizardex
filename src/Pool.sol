@@ -215,25 +215,41 @@ contract Pool is IPool {
         returns (uint256, uint256)
     {
         uint256 accountingToPay = 0;
+        uint256 totalStake = 0;
         uint256 initialAmount = amount;
         while (amount > 0 && priceLevels[0] != 0) {
-            (uint256 payStep, uint256 underlyingReceived) = _fulfillOrderByPrice(amount, priceLevels[0], receiver);
+            (uint256 payStep, uint256 underlyingReceived, uint256 stakeStep) = _fulfillOrderByPrice(
+                amount,
+                priceLevels[0],
+                receiver
+            );
             // underlyingPaid <= amount
             unchecked {
                 amount -= underlyingReceived;
             }
             accountingToPay += payStep;
+            totalStake += stakeStep;
             if (amount > 0) priceLevels[0] = priceLevels[priceLevels[0]];
         }
 
         if (initialAmount - amount < minAmountOut) revert AmountOutTooLow();
+
+        if (totalStake > 0) {
+            // slither-disable-next-line arbitrary-send-eth
+            (bool success, ) = factory.call{ value: totalStake }("");
+            assert(success);
+        }
+
         return (accountingToPay, initialAmount - amount);
     }
 
     // amount is always of underlying currency
-    function _fulfillOrderByPrice(uint256 amount, uint256 price, address receiver) internal returns (uint256, uint256) {
+    function _fulfillOrderByPrice(uint256 amount, uint256 price, address receiver)
+        internal
+        returns (uint256, uint256, uint256)
+    {
         uint256 cursor = orders[price][0].next;
-        if (cursor == 0) return (0, 0);
+        if (cursor == 0) return (0, 0, 0);
         Order memory order = orders[price][cursor];
 
         uint256 totalStake = 0;
@@ -271,15 +287,9 @@ contract Pool is IPool {
             amount = 0;
         }
 
-        if (totalStake > 0) {
-            // slither-disable-next-line arbitrary-send-eth
-            (bool success, ) = factory.call{ value: totalStake }("");
-            assert(success);
-        }
-
         underlying.safeTransfer(receiver, initialAmount - amount);
 
-        return (accountingToTransfer, initialAmount - amount);
+        return (accountingToTransfer, initialAmount - amount, totalStake);
     }
 
     // amount is always of underlying currency
