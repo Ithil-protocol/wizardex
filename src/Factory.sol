@@ -6,8 +6,8 @@ import { IFactory } from "./interfaces/IFactory.sol";
 import { Pool } from "./Pool.sol";
 
 contract Factory is IFactory, Ownable {
-    // underlying => accounting => tick => pool address
-    mapping(address => mapping(address => mapping(uint16 => address))) public override pools;
+    // underlying => accounting => pool address
+    mapping(address => mapping(address => address)) public override pools;
     mapping(uint16 => bool) public override tickSupported;
 
     event NewPool(address indexed underlying, address indexed accounting, uint256 indexed tickSpacing);
@@ -41,13 +41,13 @@ contract Factory is IFactory, Ownable {
         if (!tickSupported[tickSpacing]) revert UnsupportedTick();
         if (underlying == accounting) revert TokenMismatch();
 
-        if (pools[underlying][accounting][tickSpacing] == address(0)) {
-            pools[underlying][accounting][tickSpacing] = address(new Pool(underlying, accounting, tickSpacing));
+        if (pools[underlying][accounting] == address(0)) {
+            pools[underlying][accounting] = address(new Pool(underlying, accounting, tickSpacing));
 
             emit NewPool(underlying, accounting, tickSpacing);
         }
 
-        return pools[underlying][accounting][tickSpacing];
+        return pools[underlying][accounting];
     }
 
     receive() external payable {}

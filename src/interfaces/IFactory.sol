@@ -2,7 +2,7 @@
 pragma solidity =0.8.17;
 
 interface IFactory {
-    function pools(address underlying, address accounting, uint16 tick) external view returns (address);
+    function pools(address underlying, address accounting) external view returns (address);
 
     function tickSupported(uint16 tick) external view returns (bool);
 
