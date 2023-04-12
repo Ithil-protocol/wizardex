@@ -13,6 +13,12 @@ interface IPool {
         uint256 next;
     }
 
+    // Structure to fetch prices and volumes, only used in view functions
+    struct Volume {
+        uint256 price;
+        uint256 volume;
+    }
+
     function createOrder(uint256 amount, uint256 price, address recipient, uint256 deadline) external payable;
 
     function cancelOrder(uint256 index, uint256 price) external;

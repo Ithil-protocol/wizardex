@@ -339,4 +339,33 @@ contract Pool is IPool {
     function previewRedeem(uint256 index, uint256 price) external view returns (uint256) {
         return _orders[price][index].underlyingAmount;
     }
+
+    function volumes(uint256 startPrice, uint256 minPrice, uint256 maxLength) external view returns (Volume[] memory) {
+        Volume[] memory volumes = new Volume[](maxLength);
+        uint256 price = _nextPriceLevels[startPrice];
+        uint256 index = 0;
+        while (price >= minPrice && price != 0 && index < maxLength) {
+            Volume memory volume = Volume(price, volumeByPrice(price));
+            volumes[index] = volume;
+            price = _nextPriceLevels[price];
+            index++;
+        }
+
+        return volumes;
+    }
+
+    function volumeByPrice(uint256 price) internal view returns (uint256) {
+        uint256 cursor = _orders[price][0].next;
+        if (cursor == 0) return 0;
+        Order memory order = _orders[price][cursor];
+
+        uint256 volume = 0;
+        while (cursor != 0) {
+            volume += order.underlyingAmount;
+            cursor = order.next;
+            order = _orders[price][cursor];
+        }
+
+        return volume;
+    }
 }
