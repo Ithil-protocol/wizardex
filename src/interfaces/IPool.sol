@@ -2,6 +2,17 @@
 pragma solidity =0.8.17;
 
 interface IPool {
+    // We model makers as a circular doubly linked list with zero as first and last element
+    // This facilitates insertion and deletion of orders making the process gas efficient
+    struct Order {
+        address offerer;
+        address recipient;
+        uint256 underlyingAmount;
+        uint256 staked;
+        uint256 previous;
+        uint256 next;
+    }
+
     function createOrder(uint256 amount, uint256 price, address recipient, uint256 deadline) external payable;
 
     function cancelOrder(uint256 index, uint256 price) external;

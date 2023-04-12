@@ -6,6 +6,7 @@ import { ERC20PresetMinterPauser } from "@openzeppelin/contracts/token/ERC20/pre
 import { Test } from "forge-std/Test.sol";
 import { Factory } from "../src/Factory.sol";
 import { Pool } from "../src/Pool.sol";
+import { IPool } from "../src/interfaces/IPool.sol";
 import { Wallet } from "./Wallet.sol";
 
 contract PoolUnitTest is Test {
@@ -56,11 +57,8 @@ contract PoolUnitTest is Test {
         token0.mint(maker, amount);
 
         uint256 initialLastIndex = swapper.id(price);
-        (address lastOwner, , uint256 lastAmount, , uint256 lastPrevious, uint256 lastNext) = swapper.orders(
-            price,
-            initialLastIndex
-        );
-        assertEq(lastNext, 0);
+        IPool.Order memory firstOrder = swapper.getOrder(price, initialLastIndex);
+        assertEq(firstOrder.next, 0);
 
         /*
         amount = amount % token0.balanceOf(maker);
@@ -77,25 +75,18 @@ contract PoolUnitTest is Test {
         assertEq(swapper.id(price), initialLastIndex + 1);
 
         if (initialLastIndex > 0) {
-            (
-                address transformedOwner,
-                ,
-                uint256 transformedAmount,
-                ,
-                uint256 transformedPrevious,
-                uint256 transformedNext
-            ) = swapper.orders(price, initialLastIndex);
-            assertEq(transformedOwner, lastOwner);
-            assertEq(transformedAmount, lastAmount);
-            assertEq(transformedPrevious, lastPrevious);
-            assertEq(transformedNext, initialLastIndex + 1);
+            IPool.Order memory transformedOrder = swapper.getOrder(price, initialLastIndex);
+            assertEq(transformedOrder.offerer, firstOrder.offerer);
+            assertEq(transformedOrder.underlyingAmount, firstOrder.underlyingAmount);
+            assertEq(transformedOrder.previous, firstOrder.previous);
+            assertEq(transformedOrder.next, initialLastIndex + 1);
         }
-        (lastOwner, , lastAmount, , lastPrevious, lastNext) = swapper.orders(price, initialLastIndex + 1);
+        firstOrder = swapper.getOrder(price, initialLastIndex + 1);
 
-        assertEq(lastOwner, maker);
-        assertEq(lastAmount, amount);
-        assertEq(lastPrevious, initialLastIndex);
-        assertEq(lastNext, 0);
+        assertEq(firstOrder.offerer, maker);
+        assertEq(firstOrder.underlyingAmount, amount);
+        assertEq(firstOrder.previous, initialLastIndex);
+        assertEq(firstOrder.next, 0);
 
         return (amount, price, initialLastIndex + 1);
     }
@@ -154,7 +145,7 @@ contract PoolUnitTest is Test {
             assertEq(token1.balanceOf(maker), initialAccBalance + accountingTransfered);
             assertEq(token0.balanceOf(address(this)), initialThisBalance + amountMade);
         } else {
-            swapper.orders(price, madeIndex);
+            swapper.getOrder(price, madeIndex);
             vm.prank(maker);
             swapper.cancelOrder(madeIndex, price);
             assertEq(token0.balanceOf(maker), initialUndBalance + quotedUnd);
