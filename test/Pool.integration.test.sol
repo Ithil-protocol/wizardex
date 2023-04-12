@@ -90,10 +90,10 @@ contract Randomizer is Test {
 
         // PriceLevels before the order opening (up to 8 allowed)
         uint256[8] memory priceLevels;
-        uint256 priceLevel = swapper.priceLevels(0);
+        uint256 priceLevel = swapper.getNextPriceLevel(0);
         for (uint256 i = 0; i < 8 && priceLevel != 0; i++) {
             priceLevels[i] = priceLevel;
-            priceLevel = swapper.priceLevels(priceLevel);
+            priceLevel = swapper.getNextPriceLevel(priceLevel);
         }
 
         (uint256 previewedPrev, uint256 previewedNext, , ) = swapper.previewOrder(price, stake);
@@ -140,10 +140,10 @@ contract Randomizer is Test {
         // PRICE LEVEL CHECKS
         // define new price levels array for convenience
         uint256[8] memory newPriceLevels;
-        priceLevel = swapper.priceLevels(0);
+        priceLevel = swapper.getNextPriceLevel(0);
         for (uint256 i = 0; i < 8 && priceLevel != 0; i++) {
             newPriceLevels[i] = priceLevel;
-            priceLevel = swapper.priceLevels(priceLevel);
+            priceLevel = swapper.getNextPriceLevel(priceLevel);
         }
         uint256 step = 2;
         for (uint256 i = 0; i < 7; i++) {

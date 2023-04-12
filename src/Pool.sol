@@ -11,8 +11,9 @@ contract Pool is IPool {
     using Math for uint256;
 
     // Mapping from higher to lower
-    // By convention, priceLevels[0] is the highest bid;
-    mapping(uint256 => uint256) public priceLevels;
+    // By convention, _nextPriceLevels[0] is the highest bid;
+    // For every price P, _nextPriceLevels[P] is the highest active price smaller than P
+    mapping(uint256 => uint256) internal _nextPriceLevels;
 
     address public immutable factory;
     // Makers provide underlying and get accounting after match
@@ -100,6 +101,10 @@ contract Pool is IPool {
         return _orders[price][index];
     }
 
+    function getNextPriceLevel(uint256 price) public view returns (uint256) {
+        return _nextPriceLevels[price];
+    }
+
     function _checkSpacing(uint256 lower, uint256 higher) internal view returns (bool) {
         return lower == 0 || higher >= lower.mulDiv(tick + 10000, 10000, Math.Rounding.Up);
     }
@@ -109,18 +114,18 @@ contract Pool is IPool {
         returns (uint256, uint256)
     {
         uint256 higherPrice = 0;
-        while (priceLevels[higherPrice] > price) {
-            higherPrice = priceLevels[higherPrice];
+        while (_nextPriceLevels[higherPrice] > price) {
+            higherPrice = _nextPriceLevels[higherPrice];
         }
 
-        if (priceLevels[higherPrice] < price) {
+        if (_nextPriceLevels[higherPrice] < price) {
             if (
-                !_checkSpacing(priceLevels[higherPrice], price) ||
+                !_checkSpacing(_nextPriceLevels[higherPrice], price) ||
                 (!_checkSpacing(price, higherPrice) && higherPrice != 0)
             ) revert IncorrectTickSpacing();
 
-            priceLevels[price] = priceLevels[higherPrice];
-            priceLevels[higherPrice] = price;
+            _nextPriceLevels[price] = _nextPriceLevels[higherPrice];
+            _nextPriceLevels[higherPrice] = price;
         }
 
         // The "next" index of the last order is 0
@@ -210,10 +215,10 @@ contract Pool is IPool {
         uint256 accountingToPay = 0;
         uint256 totalStake = 0;
         uint256 initialAmount = amount;
-        while (amount > 0 && priceLevels[0] != 0) {
+        while (amount > 0 && _nextPriceLevels[0] != 0) {
             (uint256 payStep, uint256 underlyingReceived, uint256 stakeStep) = _fulfillOrderByPrice(
                 amount,
-                priceLevels[0],
+                _nextPriceLevels[0],
                 receiver
             );
             // underlyingPaid <= amount
@@ -222,7 +227,7 @@ contract Pool is IPool {
             }
             accountingToPay += payStep;
             totalStake += stakeStep;
-            if (amount > 0) priceLevels[0] = priceLevels[priceLevels[0]];
+            if (amount > 0) _nextPriceLevels[0] = _nextPriceLevels[_nextPriceLevels[0]];
         }
 
         if (initialAmount - amount < minAmountOut) revert AmountOutTooLow();
@@ -289,7 +294,7 @@ contract Pool is IPool {
     function previewTake(uint256 amount) external view returns (uint256, uint256) {
         uint256 accountingToPay = 0;
         uint256 initialAmount = amount;
-        uint256 price = priceLevels[0];
+        uint256 price = _nextPriceLevels[0];
         while (amount > 0 && price != 0) {
             (uint256 payStep, uint256 underlyingReceived) = previewTakeByPrice(amount, price);
             // underlyingPaid <= amount
@@ -297,7 +302,7 @@ contract Pool is IPool {
                 amount -= underlyingReceived;
             }
             accountingToPay += payStep;
-            if (amount > 0) price = priceLevels[price];
+            if (amount > 0) price = _nextPriceLevels[price];
         }
 
         return (accountingToPay, initialAmount - amount);
