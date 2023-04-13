@@ -35,6 +35,8 @@ contract Pool is IPool {
     // higher vlaues are indicated for more volatile pairs
     uint16 public immutable tick;
 
+    uint256 internal universalOrderId;
+
     // id of the order to access its data, by price
     mapping(uint256 => uint256) public id;
     // orders[price][id]
@@ -42,23 +44,31 @@ contract Pool is IPool {
 
     event OrderCreated(
         address indexed offerer,
+        uint256 indexed universalOrderId,
         uint256 price,
-        uint256 indexed index,
+        uint256 priceLevelLinkedListIndex,
         uint256 underlyingAmount,
         uint256 staked,
         uint256 previous,
         uint256 next
     );
     event OrderFulfilled(
-        uint256 indexed id,
         address indexed offerer,
         address indexed fulfiller,
+        uint256 indexed universalOrderId,
+        uint256 priceLevelLinkedListIndex,
         uint256 amount,
         uint256 price,
         bool totalFill
     );
 
-    event OrderCancelled(uint256 indexed id, address indexed offerer, uint256 price, uint256 underlyingToTransfer);
+    event OrderCancelled(
+        uint256 indexed universalOrderId,
+        uint256 indexed priceLevelLinkedListIndex,
+        address indexed offerer,
+        uint256 price,
+        uint256 underlyingToTransfer
+    );
 
     error RestrictedToOwner();
     error IncorrectTickSpacing();
@@ -72,11 +82,12 @@ contract Pool is IPool {
     constructor(address _underlying, address _accounting, uint16 _tick) {
         factory = msg.sender;
         accounting = IERC20(_accounting);
-        priceResolution = 10**IERC20Metadata(_accounting).decimals();
+        priceResolution = 10 ** IERC20Metadata(_accounting).decimals();
         underlying = IERC20(_underlying);
         tick = _tick;
         maximumPrice = type(uint256).max / (10000 + tick);
         maximumAmount = type(uint256).max / priceResolution;
+        universalOrderId = 0;
     }
 
     modifier checkDeadline(uint256 deadline) {
@@ -109,10 +120,13 @@ contract Pool is IPool {
         return lower == 0 || higher >= lower.mulDiv(tick + 10000, 10000, Math.Rounding.Up);
     }
 
-    function _addNode(uint256 price, uint256 amount, uint256 staked, address maker, address recipient)
-        internal
-        returns (uint256, uint256)
-    {
+    function _addNode(
+        uint256 price,
+        uint256 amount,
+        uint256 staked,
+        address maker,
+        address recipient
+    ) internal returns (uint256, uint256) {
         uint256 higherPrice = 0;
         while (_nextPriceLevels[higherPrice] > price) {
             higherPrice = _nextPriceLevels[higherPrice];
@@ -138,7 +152,8 @@ contract Pool is IPool {
             previous = next;
             next = _orders[price][next].next;
         }
-        _orders[price][id[price]] = Order(maker, recipient, amount, staked, previous, next);
+        universalOrderId += 1;
+        _orders[price][id[price]] = Order(maker, recipient, amount, staked, previous, next, universalOrderId);
         // The "next" index of the previous node is now id[price] (already bumped by 1)
         _orders[price][previous].next = id[price];
         // The "previous" index of the 0 node is now id[price]
@@ -146,11 +161,10 @@ contract Pool is IPool {
         return (previous, next);
     }
 
-    function previewOrder(uint256 price, uint256 staked)
-        public
-        view
-        returns (uint256 prev, uint256 next, uint256 position, uint256 cumulativeUndAmount)
-    {
+    function previewOrder(
+        uint256 price,
+        uint256 staked
+    ) public view returns (uint256 prev, uint256 next, uint256 position, uint256 cumulativeUndAmount) {
         next = _orders[price][0].next;
 
         while (staked <= _orders[price][next].staked && next != 0) {
@@ -176,18 +190,19 @@ contract Pool is IPool {
     }
 
     // Add a node to the list
-    function createOrder(uint256 amount, uint256 price, address recipient, uint256 deadline)
-        external
-        payable
-        checkDeadline(deadline)
-    {
+    function createOrder(
+        uint256 amount,
+        uint256 price,
+        address recipient,
+        uint256 deadline
+    ) external payable checkDeadline(deadline) {
         if (amount == 0 || price == 0) revert NullAmount();
         if (price > maximumPrice) revert PriceTooHigh();
         if (amount > maximumAmount) revert AmountTooHigh();
         underlying.safeTransferFrom(msg.sender, address(this), amount);
         (uint256 previous, uint256 next) = _addNode(price, amount, msg.value, msg.sender, recipient);
 
-        emit OrderCreated(msg.sender, price, id[price], amount, msg.value, previous, next);
+        emit OrderCreated(msg.sender, universalOrderId, price, id[price], amount, msg.value, previous, next);
     }
 
     function cancelOrder(uint256 index, uint256 price) external override {
@@ -203,15 +218,16 @@ contract Pool is IPool {
             assert(success);
         }
 
-        emit OrderCancelled(index, order.offerer, price, order.underlyingAmount);
+        emit OrderCancelled(order.universalUniqueId, index, order.offerer, price, order.underlyingAmount);
     }
 
     // amount is always of underlying currency
-    function fulfillOrder(uint256 amount, address receiver, uint256 minAmountOut, uint256 deadline)
-        external
-        checkDeadline(deadline)
-        returns (uint256, uint256)
-    {
+    function fulfillOrder(
+        uint256 amount,
+        address receiver,
+        uint256 minAmountOut,
+        uint256 deadline
+    ) external checkDeadline(deadline) returns (uint256, uint256) {
         uint256 accountingToPay = 0;
         uint256 totalStake = 0;
         uint256 initialAmount = amount;
@@ -242,10 +258,11 @@ contract Pool is IPool {
     }
 
     // amount is always of underlying currency
-    function _fulfillOrderByPrice(uint256 amount, uint256 price, address receiver)
-        internal
-        returns (uint256, uint256, uint256)
-    {
+    function _fulfillOrderByPrice(
+        uint256 amount,
+        uint256 price,
+        address receiver
+    ) internal returns (uint256, uint256, uint256) {
         uint256 cursor = _orders[price][0].next;
         if (cursor == 0) return (0, 0, 0);
         Order memory order = _orders[price][cursor];
@@ -266,7 +283,15 @@ contract Pool is IPool {
                 totalStake += order.staked;
             }
 
-            emit OrderFulfilled(cursor, order.offerer, msg.sender, order.underlyingAmount, price, true);
+            emit OrderFulfilled(
+                order.offerer,
+                msg.sender,
+                order.universalUniqueId,
+                cursor,
+                order.underlyingAmount,
+                price,
+                true
+            );
             // in case the next is zero, we reached the end of all orders
             if (cursor == 0) break;
             order = _orders[price][cursor];
@@ -281,7 +306,7 @@ contract Pool is IPool {
                 accountingToTransfer += toTransfer;
             }
 
-            emit OrderFulfilled(cursor, order.offerer, msg.sender, amount, price, false);
+            emit OrderFulfilled(order.offerer, msg.sender, order.universalUniqueId, cursor, amount, price, false);
             amount = 0;
         }
 

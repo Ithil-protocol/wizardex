@@ -11,6 +11,7 @@ interface IPool {
         uint256 staked;
         uint256 previous;
         uint256 next;
+        uint256 universalUniqueId;
     }
 
     // Structure to fetch prices and volumes, only used in view functions
@@ -19,11 +20,19 @@ interface IPool {
         uint256 volume;
     }
 
-    function createOrder(uint256 amount, uint256 price, address recipient, uint256 deadline) external payable;
+    function createOrder(
+        uint256 amount,
+        uint256 price,
+        address recipient,
+        uint256 deadline
+    ) external payable;
 
     function cancelOrder(uint256 index, uint256 price) external;
 
-    function fulfillOrder(uint256 amount, address receiver, uint256 minAmountOut, uint256 deadline)
-        external
-        returns (uint256, uint256);
+    function fulfillOrder(
+        uint256 amount,
+        address receiver,
+        uint256 minAmountOut,
+        uint256 deadline
+    ) external returns (uint256, uint256);
 }
