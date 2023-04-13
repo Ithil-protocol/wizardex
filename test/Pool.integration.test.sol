@@ -4,6 +4,7 @@ pragma solidity =0.8.17;
 import { ERC20PresetMinterPauser } from "@openzeppelin/contracts/token/ERC20/presets/ERC20PresetMinterPauser.sol";
 import { Test } from "forge-std/Test.sol";
 import { Pool } from "../src/Pool.sol";
+import { IPool } from "../src/interfaces/IPool.sol";
 import { Factory } from "../src/Factory.sol";
 import { PoolUnitTest } from "./Pool.unit.test.sol";
 import { Wallet } from "./Wallet.sol";
@@ -89,10 +90,10 @@ contract Randomizer is Test {
 
         // PriceLevels before the order opening (up to 8 allowed)
         uint256[8] memory priceLevels;
-        uint256 priceLevel = swapper.priceLevels(0);
+        uint256 priceLevel = swapper.getNextPriceLevel(0);
         for (uint256 i = 0; i < 8 && priceLevel != 0; i++) {
             priceLevels[i] = priceLevel;
-            priceLevel = swapper.priceLevels(priceLevel);
+            priceLevel = swapper.getNextPriceLevel(priceLevel);
         }
 
         (uint256 previewedPrev, uint256 previewedNext, , ) = swapper.previewOrder(price, stake);
@@ -118,31 +119,31 @@ contract Randomizer is Test {
 
         // ORDERS CHECKS
         // Check insertion went well
-        (, , , uint256 staked, uint256 previous, uint256 next) = swapper.orders(price, swapper.id(price));
-        assertEq(previous, previewedPrev);
-        assertEq(next, previewedNext);
+        IPool.Order memory order = swapper.getOrder(price, swapper.id(price));
+        assertEq(order.previous, previewedPrev);
+        assertEq(order.next, previewedNext);
         // Check orderbook consistency (maximum 8 allowed)
         // Cursor restarts from zero
-        (, , , staked, previous, next) = swapper.orders(price, 0);
-        for (uint256 i = 0; i < 8 && next != 0; i++) {
-            uint256 prevStake = staked;
-            uint256 prevNext = next;
-            (, , , staked, previous, next) = swapper.orders(price, next);
+        order = swapper.getOrder(price, 0);
+        for (uint256 i = 0; i < 8 && order.next != 0; i++) {
+            uint256 prevStake = order.staked;
+            uint256 prevNext = order.next;
+            order = swapper.getOrder(price, order.next);
             // Check FIFO and boost order as we go
             // Stakes must be non-increasing (except for first one which is zero)
             if (i == 0) assertEq(prevStake, 0);
-            else assertGe(prevStake, staked);
+            else assertGe(prevStake, order.staked);
             // if stakes are constant, FIFO applies
-            if (prevStake == staked) assertGt(prevNext, previous);
+            if (prevStake == order.staked) assertGt(prevNext, order.previous);
         }
 
         // PRICE LEVEL CHECKS
         // define new price levels array for convenience
         uint256[8] memory newPriceLevels;
-        priceLevel = swapper.priceLevels(0);
+        priceLevel = swapper.getNextPriceLevel(0);
         for (uint256 i = 0; i < 8 && priceLevel != 0; i++) {
             newPriceLevels[i] = priceLevel;
-            priceLevel = swapper.priceLevels(priceLevel);
+            priceLevel = swapper.getNextPriceLevel(priceLevel);
         }
         uint256 step = 2;
         for (uint256 i = 0; i < 7; i++) {
@@ -165,29 +166,26 @@ contract Randomizer is Test {
         // If the order exists, it pranks the order offerer and cancels
         if (makerIndexes.length == 0) return; // (There is no index initialized yet so nothing to do)
         index = makerIndexes[index % makerIndexes.length]; // (Could be empty if it was fulfilled)
-        (address offerer, , uint256 underlyingAmount, uint256 staked, uint256 previous, uint256 next) = swapper.orders(
-            price,
-            index
-        );
+        IPool.Order memory order = swapper.getOrder(price, index);
         uint256 initialSwapperBalance = underlying.balanceOf(address(swapper));
-        uint256 initialOffererBalance = underlying.balanceOf(offerer);
+        uint256 initialOffererBalance = underlying.balanceOf(order.offerer);
         uint256 initialSwapperEthBalance = address(swapper).balance;
-        uint256 initialOffererEthBalance = offerer.balance;
-        if (offerer != address(0)) {
-            vm.prank(offerer);
+        uint256 initialOffererEthBalance = order.offerer.balance;
+        if (order.offerer != address(0)) {
+            vm.prank(order.offerer);
             swapper.cancelOrder(index, price);
             // Check order deletion
-            (, , , , uint256 newPrev, ) = swapper.orders(price, next);
-            (, , , , , uint256 newNext) = swapper.orders(price, previous);
-            assertEq(newPrev, previous);
-            assertEq(newNext, next);
+            IPool.Order memory previousOrder = swapper.getOrder(price, order.next);
+            IPool.Order memory nextOrder = swapper.getOrder(price, order.previous);
+            assertEq(previousOrder.previous, order.previous);
+            assertEq(nextOrder.next, order.next);
         }
 
         // Check balances
-        assertEq(underlying.balanceOf(offerer), initialOffererBalance + underlyingAmount);
-        assertEq(underlying.balanceOf(address(swapper)), initialSwapperBalance - underlyingAmount);
-        assertEq(offerer.balance, initialOffererEthBalance + staked);
-        assertEq(address(swapper).balance, initialSwapperEthBalance - staked);
+        assertEq(underlying.balanceOf(order.offerer), initialOffererBalance + order.underlyingAmount);
+        assertEq(underlying.balanceOf(address(swapper)), initialSwapperBalance - order.underlyingAmount);
+        assertEq(order.offerer.balance, initialOffererEthBalance + order.staked);
+        assertEq(address(swapper).balance, initialSwapperEthBalance - order.staked);
     }
 
     function _fulfillOrder(uint256 amount, uint256 seed)

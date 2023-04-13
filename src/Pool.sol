@@ -10,20 +10,10 @@ contract Pool is IPool {
     using SafeERC20 for IERC20;
     using Math for uint256;
 
-    // We model makers as a circular doubly linked list with zero as first and last element
-    // This facilitates insertion and deletion of orders making the process gas efficient
-    struct Order {
-        address offerer;
-        address recipient;
-        uint256 underlyingAmount;
-        uint256 staked;
-        uint256 previous;
-        uint256 next;
-    }
-
     // Mapping from higher to lower
-    // By convention, priceLevels[0] is the highest bid;
-    mapping(uint256 => uint256) public priceLevels;
+    // By convention, _nextPriceLevels[0] is the highest bid;
+    // For every price P, _nextPriceLevels[P] is the highest active price smaller than P
+    mapping(uint256 => uint256) internal _nextPriceLevels;
 
     address public immutable factory;
     // Makers provide underlying and get accounting after match
@@ -48,7 +38,7 @@ contract Pool is IPool {
     // id of the order to access its data, by price
     mapping(uint256 => uint256) public id;
     // orders[price][id]
-    mapping(uint256 => mapping(uint256 => Order)) public orders;
+    mapping(uint256 => mapping(uint256 => Order)) internal _orders;
 
     event OrderCreated(
         address indexed offerer,
@@ -107,8 +97,16 @@ contract Pool is IPool {
         return underlyingAmount.mulDiv(priceResolution, price, Math.Rounding.Up);
     }
 
+    function getOrder(uint256 price, uint256 index) public view returns (Order memory) {
+        return _orders[price][index];
+    }
+
+    function getNextPriceLevel(uint256 price) public view returns (uint256) {
+        return _nextPriceLevels[price];
+    }
+
     function _checkSpacing(uint256 lower, uint256 higher) internal view returns (bool) {
-        return lower == 0 || higher >= lower.mulDiv(tick + 10000, 10000, Math.Rounding.Up);
+        return lower == 0 || higher >= lower.mulDiv(tick + 20000, 20000, Math.Rounding.Up);
     }
 
     function _addNode(uint256 price, uint256 amount, uint256 staked, address maker, address recipient)
@@ -116,35 +114,35 @@ contract Pool is IPool {
         returns (uint256, uint256)
     {
         uint256 higherPrice = 0;
-        while (priceLevels[higherPrice] > price) {
-            higherPrice = priceLevels[higherPrice];
+        while (_nextPriceLevels[higherPrice] > price) {
+            higherPrice = _nextPriceLevels[higherPrice];
         }
 
-        if (priceLevels[higherPrice] < price) {
+        if (_nextPriceLevels[higherPrice] < price) {
             if (
-                !_checkSpacing(priceLevels[higherPrice], price) ||
+                !_checkSpacing(_nextPriceLevels[higherPrice], price) ||
                 (!_checkSpacing(price, higherPrice) && higherPrice != 0)
             ) revert IncorrectTickSpacing();
 
-            priceLevels[price] = priceLevels[higherPrice];
-            priceLevels[higherPrice] = price;
+            _nextPriceLevels[price] = _nextPriceLevels[higherPrice];
+            _nextPriceLevels[higherPrice] = price;
         }
 
         // The "next" index of the last order is 0
         id[price]++;
         uint256 previous = 0;
-        uint256 next = orders[price][0].next;
+        uint256 next = _orders[price][0].next;
 
         // Get the latest position such that staked <= orders[price][previous].staked
-        while (staked <= orders[price][next].staked && next != 0) {
+        while (staked <= _orders[price][next].staked && next != 0) {
             previous = next;
-            next = orders[price][next].next;
+            next = _orders[price][next].next;
         }
-        orders[price][id[price]] = Order(maker, recipient, amount, staked, previous, next);
+        _orders[price][id[price]] = Order(maker, recipient, amount, staked, previous, next);
         // The "next" index of the previous node is now id[price] (already bumped by 1)
-        orders[price][previous].next = id[price];
+        _orders[price][previous].next = id[price];
         // The "previous" index of the 0 node is now id[price]
-        orders[price][next].previous = id[price];
+        _orders[price][next].previous = id[price];
         return (previous, next);
     }
 
@@ -153,13 +151,13 @@ contract Pool is IPool {
         view
         returns (uint256 prev, uint256 next, uint256 position, uint256 cumulativeUndAmount)
     {
-        next = orders[price][0].next;
+        next = _orders[price][0].next;
 
-        while (staked <= orders[price][next].staked && next != 0) {
-            cumulativeUndAmount += orders[price][next].underlyingAmount;
+        while (staked <= _orders[price][next].staked && next != 0) {
+            cumulativeUndAmount += _orders[price][next].underlyingAmount;
             position++;
             prev = next;
-            next = orders[price][next].next;
+            next = _orders[price][next].next;
         }
         return (prev, next, position, cumulativeUndAmount);
     }
@@ -167,14 +165,14 @@ contract Pool is IPool {
     function _deleteNode(uint256 price, uint256 index) internal {
         // Zero index cannot be deleted
         assert(index != 0);
-        Order memory toDelete = orders[price][index];
+        Order memory toDelete = _orders[price][index];
         // If the offerer is zero, the order was already canceled or fulfilled
         if (toDelete.offerer == address(0)) revert WrongIndex();
 
-        orders[price][toDelete.previous].next = toDelete.next;
-        orders[price][toDelete.next].previous = toDelete.previous;
+        _orders[price][toDelete.previous].next = toDelete.next;
+        _orders[price][toDelete.next].previous = toDelete.previous;
 
-        delete orders[price][index];
+        delete _orders[price][index];
     }
 
     // Add a node to the list
@@ -193,7 +191,7 @@ contract Pool is IPool {
     }
 
     function cancelOrder(uint256 index, uint256 price) external override {
-        Order memory order = orders[price][index];
+        Order memory order = _orders[price][index];
         if (order.offerer != msg.sender) revert RestrictedToOwner();
 
         _deleteNode(price, index);
@@ -217,10 +215,10 @@ contract Pool is IPool {
         uint256 accountingToPay = 0;
         uint256 totalStake = 0;
         uint256 initialAmount = amount;
-        while (amount > 0 && priceLevels[0] != 0) {
+        while (amount > 0 && _nextPriceLevels[0] != 0) {
             (uint256 payStep, uint256 underlyingReceived, uint256 stakeStep) = _fulfillOrderByPrice(
                 amount,
-                priceLevels[0],
+                _nextPriceLevels[0],
                 receiver
             );
             // underlyingPaid <= amount
@@ -229,7 +227,7 @@ contract Pool is IPool {
             }
             accountingToPay += payStep;
             totalStake += stakeStep;
-            if (amount > 0) priceLevels[0] = priceLevels[priceLevels[0]];
+            if (amount > 0) _nextPriceLevels[0] = _nextPriceLevels[_nextPriceLevels[0]];
         }
 
         if (initialAmount - amount < minAmountOut) revert AmountOutTooLow();
@@ -248,9 +246,9 @@ contract Pool is IPool {
         internal
         returns (uint256, uint256, uint256)
     {
-        uint256 cursor = orders[price][0].next;
+        uint256 cursor = _orders[price][0].next;
         if (cursor == 0) return (0, 0, 0);
-        Order memory order = orders[price][cursor];
+        Order memory order = _orders[price][cursor];
 
         uint256 totalStake = 0;
         uint256 accountingToTransfer = 0;
@@ -271,11 +269,11 @@ contract Pool is IPool {
             emit OrderFulfilled(cursor, order.offerer, msg.sender, order.underlyingAmount, price, true);
             // in case the next is zero, we reached the end of all orders
             if (cursor == 0) break;
-            order = orders[price][cursor];
+            order = _orders[price][cursor];
         }
 
         if (amount > 0 && cursor != 0) {
-            orders[price][cursor].underlyingAmount -= amount;
+            _orders[price][cursor].underlyingAmount -= amount;
             // Wrap toTransfer variable to avoid a stack too deep
             {
                 uint256 toTransfer = convertToAccounting(amount, price);
@@ -296,7 +294,7 @@ contract Pool is IPool {
     function previewTake(uint256 amount) external view returns (uint256, uint256) {
         uint256 accountingToPay = 0;
         uint256 initialAmount = amount;
-        uint256 price = priceLevels[0];
+        uint256 price = _nextPriceLevels[0];
         while (amount > 0 && price != 0) {
             (uint256 payStep, uint256 underlyingReceived) = previewTakeByPrice(amount, price);
             // underlyingPaid <= amount
@@ -304,7 +302,7 @@ contract Pool is IPool {
                 amount -= underlyingReceived;
             }
             accountingToPay += payStep;
-            if (amount > 0) price = priceLevels[price];
+            if (amount > 0) price = _nextPriceLevels[price];
         }
 
         return (accountingToPay, initialAmount - amount);
@@ -312,9 +310,9 @@ contract Pool is IPool {
 
     // View function to calculate how much accounting the taker needs to take amount
     function previewTakeByPrice(uint256 amount, uint256 price) internal view returns (uint256, uint256) {
-        uint256 cursor = orders[price][0].next;
+        uint256 cursor = _orders[price][0].next;
         if (cursor == 0) return (0, 0);
-        Order memory order = orders[price][cursor];
+        Order memory order = _orders[price][cursor];
 
         uint256 accountingToTransfer = 0;
         uint256 initialAmount = amount;
@@ -325,7 +323,7 @@ contract Pool is IPool {
             cursor = order.next;
             // in case the next is zero, we reached the end of all orders
             if (cursor == 0) break;
-            order = orders[price][cursor];
+            order = _orders[price][cursor];
         }
 
         if (amount > 0 && cursor != 0) {
@@ -339,6 +337,35 @@ contract Pool is IPool {
 
     // View function to calculate how much accounting and underlying a redeem would return
     function previewRedeem(uint256 index, uint256 price) external view returns (uint256) {
-        return orders[price][index].underlyingAmount;
+        return _orders[price][index].underlyingAmount;
+    }
+
+    function volumes(uint256 startPrice, uint256 minPrice, uint256 maxLength) external view returns (Volume[] memory) {
+        Volume[] memory volumes = new Volume[](maxLength);
+        uint256 price = _nextPriceLevels[startPrice];
+        uint256 index = 0;
+        while (price >= minPrice && price != 0 && index < maxLength) {
+            Volume memory volume = Volume(price, volumeByPrice(price));
+            volumes[index] = volume;
+            price = _nextPriceLevels[price];
+            index++;
+        }
+
+        return volumes;
+    }
+
+    function volumeByPrice(uint256 price) internal view returns (uint256) {
+        uint256 cursor = _orders[price][0].next;
+        if (cursor == 0) return 0;
+        Order memory order = _orders[price][cursor];
+
+        uint256 volume = 0;
+        while (cursor != 0) {
+            volume += order.underlyingAmount;
+            cursor = order.next;
+            order = _orders[price][cursor];
+        }
+
+        return volume;
     }
 }
