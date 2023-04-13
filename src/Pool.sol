@@ -106,7 +106,7 @@ contract Pool is IPool {
     }
 
     function _checkSpacing(uint256 lower, uint256 higher) internal view returns (bool) {
-        return lower == 0 || higher >= lower.mulDiv(tick + 10000, 20000, Math.Rounding.Up);
+        return lower == 0 || higher >= lower.mulDiv(tick + 20000, 20000, Math.Rounding.Up);
     }
 
     function _addNode(uint256 price, uint256 amount, uint256 staked, address maker, address recipient)
