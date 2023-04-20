@@ -60,10 +60,6 @@ contract Pool is IPool {
 
     event OrderCancelled(uint256 indexed id, address indexed offerer, uint256 price, uint256 underlyingToTransfer);
 
-    event HighestPriceRounded(uint256 nextPriceLevel, uint256 initialPrice, uint256 roundedPrice);
-    event LowestPriceRounded(uint256 higherPrice, uint256 initialPrice, uint256 roundedPrice);
-    event MiddlePriceRounded(uint256 higherPrice, uint256 nextPriceLevel, uint256 initialPrice, uint256 roundedPrice);
-
     error RestrictedToOwner();
     error NullAmount();
     error WrongIndex();
@@ -130,16 +126,12 @@ contract Pool is IPool {
             // If price is the highest so far and too close to the previous highest
             // round it up to the smallest available tick
             if (!_checkExtSpacing(_nextPriceLevels[higherPrice], price) && higherPrice == 0) {
-                uint256 initialPrice = price;
                 price = _nextPriceLevels[higherPrice].mulDiv(tick + 10000, 10000, Math.Rounding.Up);
-                emit HighestPriceRounded(_nextPriceLevels[higherPrice], initialPrice, price);
             }
             // If price is the lowest so far and too close to the previous lowest
             // round it up to the previous lowest
             if (!_checkExtSpacing(price, higherPrice) && _nextPriceLevels[higherPrice] == 0 && higherPrice != 0) {
-                uint256 initialPrice = price;
                 price = higherPrice;
-                emit LowestPriceRounded(higherPrice, initialPrice, price);
             }
             // If price is in the middle of two price levels and does not respect tick spacing
             // we approximate it with the nearest one, with priority upwards
@@ -147,11 +139,9 @@ contract Pool is IPool {
                 !_checkMidSpacing(_nextPriceLevels[higherPrice], price) ||
                 (!_checkMidSpacing(price, higherPrice) && higherPrice != 0)
             ) {
-                uint256 initialPrice = price;
                 price = price - _nextPriceLevels[higherPrice] < higherPrice - price
                     ? _nextPriceLevels[higherPrice]
                     : higherPrice;
-                emit MiddlePriceRounded(higherPrice, _nextPriceLevels[higherPrice], initialPrice, price);
             }
 
             _nextPriceLevels[price] = _nextPriceLevels[higherPrice];
