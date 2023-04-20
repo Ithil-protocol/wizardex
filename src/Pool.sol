@@ -62,6 +62,10 @@ contract Pool is IPool {
 
     event OrderCancelled(uint256 indexed id, address indexed offerer, uint256 price, uint256 underlyingToTransfer);
 
+    event HighestPriceRounded(uint256 nextPriceLevel, uint256 initialPrice, uint256 roundedPrice);
+    event LowestPriceRounded(uint256 higherPrice, uint256 initialPrice, uint256 roundedPrice);
+    event MiddlePriceRounded(uint256 higherPrice, uint256 nextPriceLevel, uint256 initialPrice, uint256 roundedPrice);
+
     error RestrictedToOwner();
     error IncorrectTickSpacing();
     error NullAmount();
@@ -108,35 +112,59 @@ contract Pool is IPool {
         return _nextPriceLevels[price];
     }
 
-    function _checkSpacing(uint256 lower, uint256 higher) internal view returns (bool) {
+    function _checkMidSpacing(uint256 lower, uint256 higher) internal view returns (bool) {
         return lower == 0 || higher >= lower.mulDiv(tick + 20000, 20000, Math.Rounding.Up);
+    }
+
+    function _checkExtSpacing(uint256 lower, uint256 higher) internal view returns (bool) {
+        return lower == 0 || higher >= lower.mulDiv(tick + 10000, 10000, Math.Rounding.Up);
     }
 
     function _addNode(uint256 price, uint256 amount, uint256 staked, address maker, address recipient)
         internal
-        returns (uint256, uint256)
+        returns (uint256, uint256, uint256)
     {
+        uint256 higherPrice = 0;
+        while (_nextPriceLevels[higherPrice] > price) {
+            higherPrice = _nextPriceLevels[higherPrice];
+        }
+
+        if (_nextPriceLevels[higherPrice] < price) {
+            // If price is the highest so far and too close to the previous highest
+            // round it up to the smallest available tick
+            if (!_checkExtSpacing(_nextPriceLevels[higherPrice], price) && higherPrice == 0) {
+                uint256 initialPrice = price;
+                price = _nextPriceLevels[higherPrice].mulDiv(tick + 10000, 10000, Math.Rounding.Up);
+                emit HighestPriceRounded(_nextPriceLevels[higherPrice], initialPrice, price);
+            }
+            // If price is the lowest so far and too close to the previous lowest
+            // round it up to the previous lowest
+            if (!_checkExtSpacing(price, higherPrice) && _nextPriceLevels[higherPrice] == 0 && higherPrice != 0) {
+                uint256 initialPrice = price;
+                price = higherPrice;
+                emit LowestPriceRounded(higherPrice, initialPrice, price);
+            }
+            // If price is in the middle of two price levels and does not respect tick spacing
+            // we approximate it with the nearest one, with priority upwards
+            if (
+                !_checkMidSpacing(_nextPriceLevels[higherPrice], price) ||
+                (!_checkMidSpacing(price, higherPrice) && higherPrice != 0)
+            ) {
+                uint256 initialPrice = price;
+                price = price - _nextPriceLevels[higherPrice] < higherPrice - price
+                    ? _nextPriceLevels[higherPrice]
+                    : higherPrice;
+                emit MiddlePriceRounded(higherPrice, _nextPriceLevels[higherPrice], initialPrice, price);
+            }
+
+            _nextPriceLevels[price] = _nextPriceLevels[higherPrice];
+            _nextPriceLevels[higherPrice] = price;
+        }
+
         // The "next" index of the last order is 0
         id[price]++;
         uint256 previous = 0;
         uint256 next = _orders[price][0].next;
-
-        if (next == 0) {
-            uint256 higherPrice = 0;
-            while (_nextPriceLevels[higherPrice] > price) {
-                higherPrice = _nextPriceLevels[higherPrice];
-            }
-
-            if (_nextPriceLevels[higherPrice] < price) {
-                if (
-                    !_checkSpacing(_nextPriceLevels[higherPrice], price) ||
-                    (!_checkSpacing(price, higherPrice) && higherPrice != 0)
-                ) revert IncorrectTickSpacing();
-
-                _nextPriceLevels[price] = _nextPriceLevels[higherPrice];
-                _nextPriceLevels[higherPrice] = price;
-            }
-        }
 
         // Get the latest position such that staked <= orders[price][previous].staked
         while (staked <= _orders[price][next].staked && next != 0) {
@@ -148,7 +176,7 @@ contract Pool is IPool {
         _orders[price][previous].next = id[price];
         // The "previous" index of the 0 node is now id[price]
         _orders[price][next].previous = id[price];
-        return (previous, next);
+        return (price, previous, next);
     }
 
     function _deleteNode(uint256 price, uint256 index) internal {
@@ -174,7 +202,9 @@ contract Pool is IPool {
         if (price > maximumPrice) revert PriceTooHigh();
         if (amount > maximumAmount) revert AmountTooHigh();
         underlying.safeTransferFrom(msg.sender, address(this), amount);
-        (uint256 previous, uint256 next) = _addNode(price, amount, msg.value, msg.sender, recipient);
+        uint256 previous;
+        uint256 next;
+        (price, previous, next) = _addNode(price, amount, msg.value, msg.sender, recipient);
 
         emit OrderCreated(msg.sender, price, id[price], amount, msg.value, previous, next);
     }
@@ -292,28 +322,44 @@ contract Pool is IPool {
     function previewOrder(uint256 price, uint256 staked)
         public
         view
-        returns (uint256 prev, uint256 next, uint256 position, uint256 cumulativeUndAmount, bool ticksRespected)
+        returns (uint256 prev, uint256 next, uint256 position, uint256 cumulativeUndAmount, uint256 actualPrice)
     {
-        ticksRespected = true;
+        actualPrice = price;
         uint256 higherPrice = 0;
         while (_nextPriceLevels[higherPrice] > price) {
             higherPrice = _nextPriceLevels[higherPrice];
         }
 
         if (_nextPriceLevels[higherPrice] < price) {
+            // If price is the highest so far and too close to the previous highest
+            // round it up to the smallest available tick
+            if (!_checkExtSpacing(_nextPriceLevels[higherPrice], price) && higherPrice == 0)
+                actualPrice = _nextPriceLevels[higherPrice].mulDiv(tick + 10000, 10000, Math.Rounding.Up);
+
+            // If price is the lowest so far and too close to the previous lowest
+            // round it up to the previous lowest
+            if (!_checkExtSpacing(price, higherPrice) && _nextPriceLevels[higherPrice] == 0 && higherPrice != 0)
+                actualPrice = higherPrice;
+
+            // If price is in the middle of two price levels and does not respect tick spacing
+            // we approximate it with the nearest one, with priority upwards
             if (
-                !_checkSpacing(_nextPriceLevels[higherPrice], price) ||
-                (!_checkSpacing(price, higherPrice) && higherPrice != 0)
-            ) ticksRespected = false;
+                !_checkMidSpacing(_nextPriceLevels[higherPrice], price) ||
+                (!_checkMidSpacing(price, higherPrice) && higherPrice != 0)
+            ) {
+                actualPrice = price - _nextPriceLevels[higherPrice] < higherPrice - price
+                    ? _nextPriceLevels[higherPrice]
+                    : higherPrice;
+            }
         }
 
-        next = _orders[price][0].next;
+        next = _orders[actualPrice][0].next;
 
-        while (staked <= _orders[price][next].staked && next != 0) {
-            cumulativeUndAmount += _orders[price][next].underlyingAmount;
+        while (staked <= _orders[actualPrice][next].staked && next != 0) {
+            cumulativeUndAmount += _orders[actualPrice][next].underlyingAmount;
             position++;
             prev = next;
-            next = _orders[price][next].next;
+            next = _orders[actualPrice][next].next;
         }
     }
 
