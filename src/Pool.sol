@@ -212,8 +212,7 @@ contract Pool is IPool {
         while (amount > 0 && _nextPriceLevels[0] != 0) {
             (uint256 payStep, uint256 underlyingReceived, uint256 stakeStep) = _fulfillOrderByPrice(
                 amount,
-                _nextPriceLevels[0],
-                receiver
+                _nextPriceLevels[0]
             );
             // underlyingPaid <= amount
             unchecked {
@@ -236,14 +235,13 @@ contract Pool is IPool {
             assert(success);
         }
 
+        underlying.safeTransfer(receiver, initialAmount - amount);
+
         return (accountingToPay, initialAmount - amount);
     }
 
     // amount is always of underlying currency
-    function _fulfillOrderByPrice(uint256 amount, uint256 price, address receiver)
-        internal
-        returns (uint256, uint256, uint256)
-    {
+    function _fulfillOrderByPrice(uint256 amount, uint256 price) internal returns (uint256, uint256, uint256) {
         uint256 cursor = _orders[price][0].next;
         if (cursor == 0) return (0, 0, 0);
         Order memory order = _orders[price][cursor];
@@ -282,8 +280,6 @@ contract Pool is IPool {
             emit OrderFulfilled(cursor, order.offerer, msg.sender, amount, price, false);
             amount = 0;
         }
-
-        underlying.safeTransfer(receiver, initialAmount - amount);
 
         return (accountingToTransfer, initialAmount - amount, totalStake);
     }
