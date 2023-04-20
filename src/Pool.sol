@@ -6,8 +6,6 @@ import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.s
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { IPool } from "./interfaces/IPool.sol";
 
-import { console2 } from "forge-std/console2.sol";
-
 contract Pool is IPool {
     using SafeERC20 for IERC20;
     using Math for uint256;
@@ -67,7 +65,6 @@ contract Pool is IPool {
     event MiddlePriceRounded(uint256 higherPrice, uint256 nextPriceLevel, uint256 initialPrice, uint256 roundedPrice);
 
     error RestrictedToOwner();
-    error IncorrectTickSpacing();
     error NullAmount();
     error WrongIndex();
     error PriceTooHigh();
