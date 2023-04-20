@@ -202,6 +202,7 @@ contract Randomizer is Test {
                 amount,
                 takerRecipient,
                 0,
+                type(uint256).max,
                 block.timestamp + 1000
             );
             assertEq(accounting.balanceOf(taker1), initialAccounting - accountingPaid);
@@ -213,6 +214,7 @@ contract Randomizer is Test {
                 amount,
                 takerRecipient,
                 0,
+                type(uint256).max,
                 block.timestamp + 1000
             );
             assertEq(accounting.balanceOf(taker2), initialAccounting - accountingPaid);

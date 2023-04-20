@@ -23,7 +23,7 @@ interface IPool {
 
     function cancelOrder(uint256 index, uint256 price) external;
 
-    function fulfillOrder(uint256 amount, address receiver, uint256 minAmountOut, uint256 deadline)
+    function fulfillOrder(uint256 amount, address receiver, uint256 minReceived, uint256 maxPaid, uint256 deadline)
         external
         returns (uint256, uint256);
 }

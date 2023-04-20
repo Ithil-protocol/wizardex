@@ -69,7 +69,8 @@ contract Pool is IPool {
     error PriceTooHigh();
     error AmountTooHigh();
     error StaleOrder();
-    error AmountOutTooLow();
+    error ReceivedTooLow();
+    error PaidTooHigh();
 
     constructor(address _underlying, address _accounting, uint16 _tick) {
         factory = msg.sender;
@@ -115,25 +116,27 @@ contract Pool is IPool {
         internal
         returns (uint256, uint256)
     {
-        uint256 higherPrice = 0;
-        while (_nextPriceLevels[higherPrice] > price) {
-            higherPrice = _nextPriceLevels[higherPrice];
-        }
-
-        if (_nextPriceLevels[higherPrice] < price) {
-            if (
-                !_checkSpacing(_nextPriceLevels[higherPrice], price) ||
-                (!_checkSpacing(price, higherPrice) && higherPrice != 0)
-            ) revert IncorrectTickSpacing();
-
-            _nextPriceLevels[price] = _nextPriceLevels[higherPrice];
-            _nextPriceLevels[higherPrice] = price;
-        }
-
         // The "next" index of the last order is 0
         id[price]++;
         uint256 previous = 0;
         uint256 next = _orders[price][0].next;
+
+        if (next == 0) {
+            uint256 higherPrice = 0;
+            while (_nextPriceLevels[higherPrice] > price) {
+                higherPrice = _nextPriceLevels[higherPrice];
+            }
+
+            if (_nextPriceLevels[higherPrice] < price) {
+                if (
+                    !_checkSpacing(_nextPriceLevels[higherPrice], price) ||
+                    (!_checkSpacing(price, higherPrice) && higherPrice != 0)
+                ) revert IncorrectTickSpacing();
+
+                _nextPriceLevels[price] = _nextPriceLevels[higherPrice];
+                _nextPriceLevels[higherPrice] = price;
+            }
+        }
 
         // Get the latest position such that staked <= orders[price][previous].staked
         while (staked <= _orders[price][next].staked && next != 0) {
@@ -201,7 +204,7 @@ contract Pool is IPool {
     }
 
     // amount is always of underlying currency
-    function fulfillOrder(uint256 amount, address receiver, uint256 minAmountOut, uint256 deadline)
+    function fulfillOrder(uint256 amount, address receiver, uint256 minReceived, uint256 maxPaid, uint256 deadline)
         external
         checkDeadline(deadline)
         returns (uint256, uint256)
@@ -227,7 +230,8 @@ contract Pool is IPool {
             }
         }
 
-        if (initialAmount - amount < minAmountOut) revert AmountOutTooLow();
+        if (initialAmount - amount < minReceived) revert ReceivedTooLow();
+        if (accountingToPay > maxPaid) revert PaidTooHigh();
 
         if (totalStake > 0) {
             // slither-disable-next-line arbitrary-send-eth

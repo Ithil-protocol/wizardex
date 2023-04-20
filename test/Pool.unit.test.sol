@@ -109,6 +109,7 @@ contract PoolUnitTest is Test {
             amountTaken,
             address(this),
             0,
+            type(uint256).max,
             block.timestamp + 1000
         );
         assertEq(underlyingTaken, prevUnd);
@@ -185,15 +186,17 @@ contract PoolUnitTest is Test {
                     taken,
                     taker,
                     minAmountOut,
+                    type(uint256).max,
                     block.timestamp + 1000
                 );
             } else {
                 vm.startPrank(taker);
-                vm.expectRevert(bytes4(keccak256(abi.encodePacked("AmountOutTooLow()"))));
+                vm.expectRevert(bytes4(keccak256(abi.encodePacked("ReceivedTooLow()"))));
                 (accountingToTransfer, underlyingToTransfer) = swapper.fulfillOrder(
                     taken,
                     taker,
                     minAmountOut,
+                    type(uint256).max,
                     block.timestamp + 1000
                 );
                 vm.stopPrank();
