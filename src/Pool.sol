@@ -61,13 +61,13 @@ contract Pool is IPool {
     event OrderCancelled(uint256 indexed id, address indexed offerer, uint256 price, uint256 underlyingToTransfer);
 
     error RestrictedToOwner();
-    error IncorrectTickSpacing();
     error NullAmount();
     error WrongIndex();
     error PriceTooHigh();
     error AmountTooHigh();
     error StaleOrder();
-    error AmountOutTooLow();
+    error ReceivedTooLow();
+    error PaidTooHigh();
 
     constructor(address _underlying, address _accounting, uint16 _tick) {
         factory = msg.sender;
@@ -105,13 +105,17 @@ contract Pool is IPool {
         return _nextPriceLevels[price];
     }
 
-    function _checkSpacing(uint256 lower, uint256 higher) internal view returns (bool) {
+    function _checkMidSpacing(uint256 lower, uint256 higher) internal view returns (bool) {
         return lower == 0 || higher >= lower.mulDiv(tick + 20000, 20000, Math.Rounding.Up);
+    }
+
+    function _checkExtSpacing(uint256 lower, uint256 higher) internal view returns (bool) {
+        return lower == 0 || higher >= lower.mulDiv(tick + 10000, 10000, Math.Rounding.Up);
     }
 
     function _addNode(uint256 price, uint256 amount, uint256 staked, address maker, address recipient)
         internal
-        returns (uint256, uint256)
+        returns (uint256, uint256, uint256)
     {
         uint256 higherPrice = 0;
         while (_nextPriceLevels[higherPrice] > price) {
@@ -119,10 +123,26 @@ contract Pool is IPool {
         }
 
         if (_nextPriceLevels[higherPrice] < price) {
+            // If price is the highest so far and too close to the previous highest
+            // round it up to the smallest available tick
+            if (!_checkExtSpacing(_nextPriceLevels[higherPrice], price) && higherPrice == 0) {
+                price = _nextPriceLevels[higherPrice].mulDiv(tick + 10000, 10000, Math.Rounding.Up);
+            }
+            // If price is the lowest so far and too close to the previous lowest
+            // round it up to the previous lowest
+            if (!_checkExtSpacing(price, higherPrice) && _nextPriceLevels[higherPrice] == 0 && higherPrice != 0) {
+                price = higherPrice;
+            }
+            // If price is in the middle of two price levels and does not respect tick spacing
+            // we approximate it with the nearest one, with priority upwards
             if (
-                !_checkSpacing(_nextPriceLevels[higherPrice], price) ||
-                (!_checkSpacing(price, higherPrice) && higherPrice != 0)
-            ) revert IncorrectTickSpacing();
+                !_checkMidSpacing(_nextPriceLevels[higherPrice], price) ||
+                (!_checkMidSpacing(price, higherPrice) && higherPrice != 0)
+            ) {
+                price = price - _nextPriceLevels[higherPrice] < higherPrice - price
+                    ? _nextPriceLevels[higherPrice]
+                    : higherPrice;
+            }
 
             _nextPriceLevels[price] = _nextPriceLevels[higherPrice];
             _nextPriceLevels[higherPrice] = price;
@@ -143,23 +163,7 @@ contract Pool is IPool {
         _orders[price][previous].next = id[price];
         // The "previous" index of the 0 node is now id[price]
         _orders[price][next].previous = id[price];
-        return (previous, next);
-    }
-
-    function previewOrder(uint256 price, uint256 staked)
-        public
-        view
-        returns (uint256 prev, uint256 next, uint256 position, uint256 cumulativeUndAmount)
-    {
-        next = _orders[price][0].next;
-
-        while (staked <= _orders[price][next].staked && next != 0) {
-            cumulativeUndAmount += _orders[price][next].underlyingAmount;
-            position++;
-            prev = next;
-            next = _orders[price][next].next;
-        }
-        return (prev, next, position, cumulativeUndAmount);
+        return (price, previous, next);
     }
 
     function _deleteNode(uint256 price, uint256 index) internal {
@@ -185,7 +189,9 @@ contract Pool is IPool {
         if (price > maximumPrice) revert PriceTooHigh();
         if (amount > maximumAmount) revert AmountTooHigh();
         underlying.safeTransferFrom(msg.sender, address(this), amount);
-        (uint256 previous, uint256 next) = _addNode(price, amount, msg.value, msg.sender, recipient);
+        uint256 previous;
+        uint256 next;
+        (price, previous, next) = _addNode(price, amount, msg.value, msg.sender, recipient);
 
         emit OrderCreated(msg.sender, price, id[price], amount, msg.value, previous, next);
     }
@@ -195,6 +201,14 @@ contract Pool is IPool {
         if (order.offerer != msg.sender) revert RestrictedToOwner();
 
         _deleteNode(price, index);
+
+        // If the order is the only one of the priceLevel, update price levels
+        if (_orders[price][0].next == 0) {
+            uint256 higherPrice = _nextPriceLevels[0];
+            while (_nextPriceLevels[higherPrice] > price) higherPrice = _nextPriceLevels[higherPrice];
+            _nextPriceLevels[higherPrice] = _nextPriceLevels[price];
+            delete _nextPriceLevels[price];
+        }
 
         underlying.safeTransfer(msg.sender, order.underlyingAmount);
 
@@ -207,7 +221,7 @@ contract Pool is IPool {
     }
 
     // amount is always of underlying currency
-    function fulfillOrder(uint256 amount, address receiver, uint256 minAmountOut, uint256 deadline)
+    function fulfillOrder(uint256 amount, address receiver, uint256 minReceived, uint256 maxPaid, uint256 deadline)
         external
         checkDeadline(deadline)
         returns (uint256, uint256)
@@ -218,8 +232,7 @@ contract Pool is IPool {
         while (amount > 0 && _nextPriceLevels[0] != 0) {
             (uint256 payStep, uint256 underlyingReceived, uint256 stakeStep) = _fulfillOrderByPrice(
                 amount,
-                _nextPriceLevels[0],
-                receiver
+                _nextPriceLevels[0]
             );
             // underlyingPaid <= amount
             unchecked {
@@ -227,10 +240,15 @@ contract Pool is IPool {
             }
             accountingToPay += payStep;
             totalStake += stakeStep;
-            if (amount > 0) _nextPriceLevels[0] = _nextPriceLevels[_nextPriceLevels[0]];
+            if (amount > 0) {
+                uint256 priceToDelete = _nextPriceLevels[0];
+                _nextPriceLevels[0] = _nextPriceLevels[priceToDelete];
+                delete _nextPriceLevels[priceToDelete];
+            }
         }
 
-        if (initialAmount - amount < minAmountOut) revert AmountOutTooLow();
+        if (initialAmount - amount < minReceived) revert ReceivedTooLow();
+        if (accountingToPay > maxPaid) revert PaidTooHigh();
 
         if (totalStake > 0) {
             // slither-disable-next-line arbitrary-send-eth
@@ -238,14 +256,13 @@ contract Pool is IPool {
             assert(success);
         }
 
+        underlying.safeTransfer(receiver, initialAmount - amount);
+
         return (accountingToPay, initialAmount - amount);
     }
 
     // amount is always of underlying currency
-    function _fulfillOrderByPrice(uint256 amount, uint256 price, address receiver)
-        internal
-        returns (uint256, uint256, uint256)
-    {
+    function _fulfillOrderByPrice(uint256 amount, uint256 price) internal returns (uint256, uint256, uint256) {
         uint256 cursor = _orders[price][0].next;
         if (cursor == 0) return (0, 0, 0);
         Order memory order = _orders[price][cursor];
@@ -285,9 +302,52 @@ contract Pool is IPool {
             amount = 0;
         }
 
-        underlying.safeTransfer(receiver, initialAmount - amount);
-
         return (accountingToTransfer, initialAmount - amount, totalStake);
+    }
+
+    // Check in which position a new order would be, given the staked amount and price
+    function previewOrder(uint256 price, uint256 staked)
+        public
+        view
+        returns (uint256 prev, uint256 next, uint256 position, uint256 cumulativeUndAmount, uint256 actualPrice)
+    {
+        actualPrice = price;
+        uint256 higherPrice = 0;
+        while (_nextPriceLevels[higherPrice] > price) {
+            higherPrice = _nextPriceLevels[higherPrice];
+        }
+
+        if (_nextPriceLevels[higherPrice] < price) {
+            // If price is the highest so far and too close to the previous highest
+            // round it up to the smallest available tick
+            if (!_checkExtSpacing(_nextPriceLevels[higherPrice], price) && higherPrice == 0)
+                actualPrice = _nextPriceLevels[higherPrice].mulDiv(tick + 10000, 10000, Math.Rounding.Up);
+
+            // If price is the lowest so far and too close to the previous lowest
+            // round it up to the previous lowest
+            if (!_checkExtSpacing(price, higherPrice) && _nextPriceLevels[higherPrice] == 0 && higherPrice != 0)
+                actualPrice = higherPrice;
+
+            // If price is in the middle of two price levels and does not respect tick spacing
+            // we approximate it with the nearest one, with priority upwards
+            if (
+                !_checkMidSpacing(_nextPriceLevels[higherPrice], price) ||
+                (!_checkMidSpacing(price, higherPrice) && higherPrice != 0)
+            ) {
+                actualPrice = price - _nextPriceLevels[higherPrice] < higherPrice - price
+                    ? _nextPriceLevels[higherPrice]
+                    : higherPrice;
+            }
+        }
+
+        next = _orders[actualPrice][0].next;
+
+        while (staked <= _orders[actualPrice][next].staked && next != 0) {
+            cumulativeUndAmount += _orders[actualPrice][next].underlyingAmount;
+            position++;
+            prev = next;
+            next = _orders[actualPrice][next].next;
+        }
     }
 
     // amount is always of underlying currency
@@ -341,17 +401,17 @@ contract Pool is IPool {
     }
 
     function volumes(uint256 startPrice, uint256 minPrice, uint256 maxLength) external view returns (Volume[] memory) {
-        Volume[] memory volumes = new Volume[](maxLength);
+        Volume[] memory volumeArray = new Volume[](maxLength);
         uint256 price = _nextPriceLevels[startPrice];
         uint256 index = 0;
         while (price >= minPrice && price != 0 && index < maxLength) {
             Volume memory volume = Volume(price, volumeByPrice(price));
-            volumes[index] = volume;
+            volumeArray[index] = volume;
             price = _nextPriceLevels[price];
             index++;
         }
 
-        return volumes;
+        return volumeArray;
     }
 
     function volumeByPrice(uint256 price) internal view returns (uint256) {
