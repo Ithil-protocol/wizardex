@@ -96,7 +96,7 @@ contract Randomizer is Test {
             priceLevel = swapper.getNextPriceLevel(priceLevel);
         }
 
-        (uint256 previewedPrev, uint256 previewedNext, , ) = swapper.previewOrder(price, stake);
+        (uint256 previewedPrev, uint256 previewedNext, , , ) = swapper.previewOrder(price, stake);
 
         if (seed % 2 == 1) {
             if (stake > 0) {

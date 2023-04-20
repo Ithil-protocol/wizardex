@@ -288,8 +288,21 @@ contract Pool is IPool {
     function previewOrder(uint256 price, uint256 staked)
         public
         view
-        returns (uint256 prev, uint256 next, uint256 position, uint256 cumulativeUndAmount)
+        returns (uint256 prev, uint256 next, uint256 position, uint256 cumulativeUndAmount, bool ticksRespected)
     {
+        ticksRespected = true;
+        uint256 higherPrice = 0;
+        while (_nextPriceLevels[higherPrice] > price) {
+            higherPrice = _nextPriceLevels[higherPrice];
+        }
+
+        if (_nextPriceLevels[higherPrice] < price) {
+            if (
+                !_checkSpacing(_nextPriceLevels[higherPrice], price) ||
+                (!_checkSpacing(price, higherPrice) && higherPrice != 0)
+            ) ticksRespected = false;
+        }
+
         next = _orders[price][0].next;
 
         while (staked <= _orders[price][next].staked && next != 0) {
@@ -298,7 +311,6 @@ contract Pool is IPool {
             prev = next;
             next = _orders[price][next].next;
         }
-        return (prev, next, position, cumulativeUndAmount);
     }
 
     // amount is always of underlying currency
