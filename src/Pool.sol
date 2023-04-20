@@ -6,6 +6,8 @@ import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.s
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { IPool } from "./interfaces/IPool.sol";
 
+import { console2 } from "forge-std/console2.sol";
+
 contract Pool is IPool {
     using SafeERC20 for IERC20;
     using Math for uint256;
@@ -146,22 +148,6 @@ contract Pool is IPool {
         return (previous, next);
     }
 
-    function previewOrder(uint256 price, uint256 staked)
-        public
-        view
-        returns (uint256 prev, uint256 next, uint256 position, uint256 cumulativeUndAmount)
-    {
-        next = _orders[price][0].next;
-
-        while (staked <= _orders[price][next].staked && next != 0) {
-            cumulativeUndAmount += _orders[price][next].underlyingAmount;
-            position++;
-            prev = next;
-            next = _orders[price][next].next;
-        }
-        return (prev, next, position, cumulativeUndAmount);
-    }
-
     function _deleteNode(uint256 price, uint256 index) internal {
         // Zero index cannot be deleted
         assert(index != 0);
@@ -196,6 +182,14 @@ contract Pool is IPool {
 
         _deleteNode(price, index);
 
+        // If the order is the only one of the priceLevel, update price levels
+        if (_orders[price][0].next == 0) {
+            uint256 higherPrice = _nextPriceLevels[0];
+            while (_nextPriceLevels[higherPrice] > price) higherPrice = _nextPriceLevels[higherPrice];
+            _nextPriceLevels[higherPrice] = _nextPriceLevels[price];
+            delete _nextPriceLevels[price];
+        }
+
         underlying.safeTransfer(msg.sender, order.underlyingAmount);
 
         if (order.staked > 0) {
@@ -227,7 +221,11 @@ contract Pool is IPool {
             }
             accountingToPay += payStep;
             totalStake += stakeStep;
-            if (amount > 0) _nextPriceLevels[0] = _nextPriceLevels[_nextPriceLevels[0]];
+            if (amount > 0) {
+                uint256 priceToDelete = _nextPriceLevels[0];
+                _nextPriceLevels[0] = _nextPriceLevels[priceToDelete];
+                delete _nextPriceLevels[priceToDelete];
+            }
         }
 
         if (initialAmount - amount < minAmountOut) revert AmountOutTooLow();
@@ -290,6 +288,23 @@ contract Pool is IPool {
         return (accountingToTransfer, initialAmount - amount, totalStake);
     }
 
+    // Check in which position a new order would be, given the staked amount and price
+    function previewOrder(uint256 price, uint256 staked)
+        public
+        view
+        returns (uint256 prev, uint256 next, uint256 position, uint256 cumulativeUndAmount)
+    {
+        next = _orders[price][0].next;
+
+        while (staked <= _orders[price][next].staked && next != 0) {
+            cumulativeUndAmount += _orders[price][next].underlyingAmount;
+            position++;
+            prev = next;
+            next = _orders[price][next].next;
+        }
+        return (prev, next, position, cumulativeUndAmount);
+    }
+
     // amount is always of underlying currency
     function previewTake(uint256 amount) external view returns (uint256, uint256) {
         uint256 accountingToPay = 0;
@@ -341,17 +356,17 @@ contract Pool is IPool {
     }
 
     function volumes(uint256 startPrice, uint256 minPrice, uint256 maxLength) external view returns (Volume[] memory) {
-        Volume[] memory volumes = new Volume[](maxLength);
+        Volume[] memory volumeArray = new Volume[](maxLength);
         uint256 price = _nextPriceLevels[startPrice];
         uint256 index = 0;
         while (price >= minPrice && price != 0 && index < maxLength) {
             Volume memory volume = Volume(price, volumeByPrice(price));
-            volumes[index] = volume;
+            volumeArray[index] = volume;
             price = _nextPriceLevels[price];
             index++;
         }
 
-        return volumes;
+        return volumeArray;
     }
 
     function volumeByPrice(uint256 price) internal view returns (uint256) {
