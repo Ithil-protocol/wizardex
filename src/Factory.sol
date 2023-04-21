@@ -33,21 +33,27 @@ contract Factory is IFactory, Ownable {
         assert(success);
     }
 
-    function createPool(address underlying, address accounting, uint16 tickSpacing)
+    function createPool(address token0, address token1, uint16 tickSpacing)
         external
         override
-        returns (address)
+        returns (address, address)
     {
         if (!tickSupported[tickSpacing]) revert UnsupportedTick();
-        if (underlying == accounting) revert TokenMismatch();
+        if (token0 == token1) revert TokenMismatch();
 
-        if (pools[underlying][accounting] == address(0)) {
-            pools[underlying][accounting] = address(new Pool(underlying, accounting, tickSpacing));
+        if (pools[token0][token1] == address(0)) {
+            pools[token0][token1] = address(new Pool(token0, token1, tickSpacing));
 
-            emit NewPool(underlying, accounting, tickSpacing);
+            emit NewPool(token0, token1, tickSpacing);
         }
 
-        return pools[underlying][accounting];
+        if (pools[token1][token0] == address(0)) {
+            pools[token1][token0] = address(new Pool(token1, token0, tickSpacing));
+
+            emit NewPool(token1, token0, tickSpacing);
+        }
+
+        return (pools[token0][token1], pools[token1][token0]);
     }
 
     receive() external payable {}

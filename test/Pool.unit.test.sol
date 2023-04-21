@@ -13,8 +13,8 @@ contract PoolUnitTest is Test {
     Factory internal immutable factory;
     Pool internal immutable swapper;
 
-    ERC20PresetMinterPauser internal immutable token0;
-    ERC20PresetMinterPauser internal immutable token1;
+    ERC20PresetMinterPauser internal immutable underlying;
+    ERC20PresetMinterPauser internal immutable accounting;
 
     address internal immutable maker;
     address internal immutable taker;
@@ -26,11 +26,12 @@ contract PoolUnitTest is Test {
     uint256 internal immutable maximumAmount;
 
     constructor() {
-        token0 = new ERC20PresetMinterPauser("token0", "TKN0");
-        token1 = new ERC20PresetMinterPauser("token1", "TKN1");
+        underlying = new ERC20PresetMinterPauser("underlying", "TKN0");
+        accounting = new ERC20PresetMinterPauser("accounting", "TKN1");
         factory = new Factory();
         tick = 1;
-        swapper = Pool(factory.createPool(address(token0), address(token1), tick));
+        (address pool, ) = factory.createPool(address(underlying), address(accounting), tick);
+        swapper = Pool(pool);
         maker = address(new Wallet());
         taker = address(new Wallet());
         maximumPrice = type(uint256).max / (10000 + tick);
@@ -42,10 +43,10 @@ contract PoolUnitTest is Test {
         vm.deal(taker, 1 ether);
 
         vm.prank(maker);
-        token0.approve(address(swapper), type(uint256).max);
+        underlying.approve(address(swapper), type(uint256).max);
 
         vm.prank(taker);
-        token1.approve(address(swapper), type(uint256).max);
+        accounting.approve(address(swapper), type(uint256).max);
     }
 
     function testCreateOrder(uint256 amount, uint256 price, uint256 stake) public returns (uint256, uint256, uint256) {
@@ -54,14 +55,14 @@ contract PoolUnitTest is Test {
         price = price % maximumPrice;
         if (price == 0) price++;
 
-        token0.mint(maker, amount);
+        underlying.mint(maker, amount);
 
         uint256 initialLastIndex = swapper.id(price);
         IPool.Order memory firstOrder = swapper.getOrder(price, initialLastIndex);
         assertEq(firstOrder.next, 0);
 
         /*
-        amount = amount % token0.balanceOf(maker);
+        amount = amount % underlying.balanceOf(maker);
         if (amount == 0) amount++;
         */
 
@@ -102,7 +103,7 @@ contract PoolUnitTest is Test {
         uint256 underlyingTaken;
         uint256 accountingTransfered;
 
-        token1.mint(taker, accountingToPay);
+        accounting.mint(taker, accountingToPay);
 
         vm.startPrank(taker);
         (accountingTransfered, underlyingTaken) = swapper.fulfillOrder(
@@ -123,15 +124,15 @@ contract PoolUnitTest is Test {
         uint256 accountingTransfered = 0;
         uint256 madeIndex = 0;
 
-        uint256 initialThisBalance = token1.balanceOf(address(swapper));
-        uint256 initialAccBalance = token1.balanceOf(maker);
+        uint256 initialThisBalance = accounting.balanceOf(address(swapper));
+        uint256 initialAccBalance = accounting.balanceOf(maker);
         (amountMade, underlyingTaken, accountingTransfered, price, madeIndex) = testFulfillOrder(
             amountMade,
             amountTaken,
             price,
             stake
         );
-        uint256 initialUndBalance = token0.balanceOf(maker);
+        uint256 initialUndBalance = underlying.balanceOf(maker);
 
         vm.expectRevert(bytes4(keccak256(abi.encodePacked("RestrictedToOwner()"))));
         swapper.cancelOrder(madeIndex, price);
@@ -143,13 +144,13 @@ contract PoolUnitTest is Test {
             vm.expectRevert(bytes4(keccak256(abi.encodePacked("RestrictedToOwner()"))));
             swapper.cancelOrder(madeIndex, price);
             vm.stopPrank();
-            assertEq(token1.balanceOf(maker), initialAccBalance + accountingTransfered);
-            assertEq(token0.balanceOf(address(this)), initialThisBalance + amountMade);
+            assertEq(accounting.balanceOf(maker), initialAccBalance + accountingTransfered);
+            assertEq(underlying.balanceOf(address(this)), initialThisBalance + amountMade);
         } else {
             swapper.getOrder(price, madeIndex);
             vm.prank(maker);
             swapper.cancelOrder(madeIndex, price);
-            assertEq(token0.balanceOf(maker), initialUndBalance + quotedUnd);
+            assertEq(underlying.balanceOf(maker), initialUndBalance + quotedUnd);
         }
     }
 
@@ -159,7 +160,7 @@ contract PoolUnitTest is Test {
         vm.assume(made1 > 0);
         vm.assume(made2 > 0);
         // do not allow absurdely high prices that cause overflows
-        /// vm.assume(price < type(uint256).max / token1.balanceOf(taker));
+        /// vm.assume(price < type(uint256).max / accounting.balanceOf(taker));
         uint256 underlyingToTransfer;
         uint256 accountingToTransfer;
         uint256 index1;
@@ -167,14 +168,14 @@ contract PoolUnitTest is Test {
         uint256 prevAcc1;
         uint256 prevAcc2;
         {
-            uint256 initialtoken1Balance = token1.balanceOf(maker);
-            uint256 initialtoken0Balance = token0.balanceOf(taker);
+            uint256 initialaccountingBalance = accounting.balanceOf(maker);
+            uint256 initialunderlyingBalance = underlying.balanceOf(taker);
             (made1, price, index1) = testCreateOrder(made1, price, 0);
-            made2 = token0.balanceOf(maker) == 0 ? 0 : made2 % token0.balanceOf(maker);
+            made2 = underlying.balanceOf(maker) == 0 ? 0 : made2 % underlying.balanceOf(maker);
             (made2, price, index2) = testCreateOrder(made2, price, 0);
 
             // Taker can afford to take
-            uint256 maxTaken = swapper.convertToUnderlying(token1.balanceOf(taker), price);
+            uint256 maxTaken = swapper.convertToUnderlying(accounting.balanceOf(taker), price);
             taken = maxTaken == 0 ? 0 : taken % maxTaken;
 
             prevAcc1 = swapper.previewRedeem(index1, price);
@@ -201,8 +202,8 @@ contract PoolUnitTest is Test {
                 );
                 vm.stopPrank();
             }
-            assertEq(token1.balanceOf(maker), initialtoken1Balance + accountingToTransfer);
-            assertEq(token0.balanceOf(taker), initialtoken0Balance + underlyingToTransfer);
+            assertEq(accounting.balanceOf(maker), initialaccountingBalance + accountingToTransfer);
+            assertEq(underlying.balanceOf(taker), initialunderlyingBalance + underlyingToTransfer);
         }
 
         if (underlyingToTransfer < made1) {

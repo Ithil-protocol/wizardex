@@ -6,5 +6,5 @@ interface IFactory {
 
     function tickSupported(uint16 tick) external view returns (bool);
 
-    function createPool(address underlying, address accounting, uint16 tickSpacing) external returns (address);
+    function createPool(address underlying, address accounting, uint16 tickSpacing) external returns (address, address);
 }

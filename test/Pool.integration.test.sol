@@ -42,7 +42,8 @@ contract Randomizer is Test {
         accounting = new ERC20PresetMinterPauser("accounting", "TKN1");
         factory = new Factory();
         tick = _tick;
-        swapper = Pool(factory.createPool(address(underlying), address(accounting), tick));
+        (address pool, ) = factory.createPool(address(underlying), address(accounting), tick);
+        swapper = Pool(pool);
         maker1 = address(new Wallet());
         taker1 = address(new Wallet());
         maker2 = address(new Wallet());
