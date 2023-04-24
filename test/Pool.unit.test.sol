@@ -233,7 +233,7 @@ contract PoolUnitTest is Test {
         assertEq(address(factory).balance, 0);
     }
 
-    function testVolumes(uint256 amountMade, uint256 amountTaken, uint256 price, uint256 stake) public {
+    function testVolumes(uint256 amountMade, uint256 /*amountTaken*/, uint256 price, uint256 stake) public {
         (amountMade, price, ) = testCreateOrder(amountMade, price, stake);
         IPool.Volume[] memory volumes = swapper.volumes(0, 0, 3);
         assertEq(volumes[0].price, price);
