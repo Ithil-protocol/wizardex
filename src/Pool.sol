@@ -230,17 +230,17 @@ contract Pool is IPool {
         uint256 totalStake = 0;
         uint256 initialAmount = amount;
         while (amount > 0 && _nextPriceLevels[0] != 0) {
-            (uint256 payStep, uint256 underlyingReceived, uint256 stakeStep) = _fulfillOrderByPrice(
+            (uint256 payStep, uint256 underlyingReceived, uint256 stakeStep, uint256 iterator) = _fulfillOrderByPrice(
                 amount,
                 _nextPriceLevels[0]
             );
-            // underlyingPaid <= amount
+            // underlyingReceived <= amount
             unchecked {
                 amount -= underlyingReceived;
             }
             accountingToPay += payStep;
             totalStake += stakeStep;
-            if (amount > 0) {
+            if (iterator == 0) {
                 uint256 priceToDelete = _nextPriceLevels[0];
                 _nextPriceLevels[0] = _nextPriceLevels[priceToDelete];
                 delete _nextPriceLevels[priceToDelete];
@@ -262,19 +262,19 @@ contract Pool is IPool {
     }
 
     // amount is always of underlying currency
-    function _fulfillOrderByPrice(uint256 amount, uint256 price) internal returns (uint256, uint256, uint256) {
-        uint256 cursor = _orders[price][0].next;
-        if (cursor == 0) return (0, 0, 0);
-        Order memory order = _orders[price][cursor];
+    function _fulfillOrderByPrice(uint256 amount, uint256 price) internal returns (uint256, uint256, uint256, uint256) {
+        uint256 iterator = _orders[price][0].next;
+        if (iterator == 0) return (0, 0, 0, 0);
+        Order memory order = _orders[price][iterator];
 
         uint256 totalStake = 0;
         uint256 accountingToTransfer = 0;
         uint256 initialAmount = amount;
 
         while (amount >= order.underlyingAmount) {
-            _deleteNode(price, cursor);
+            _deleteNode(price, iterator);
             amount -= order.underlyingAmount;
-            cursor = order.next;
+            iterator = order.next;
             // Wrap toTransfer variable to avoid a stack too deep
             {
                 uint256 toTransfer = convertToAccounting(order.underlyingAmount, price);
@@ -283,14 +283,14 @@ contract Pool is IPool {
                 totalStake += order.staked;
             }
 
-            emit OrderFulfilled(cursor, order.offerer, msg.sender, order.underlyingAmount, price, true);
+            emit OrderFulfilled(iterator, order.offerer, msg.sender, order.underlyingAmount, price, true);
             // in case the next is zero, we reached the end of all orders
-            if (cursor == 0) break;
-            order = _orders[price][cursor];
+            if (iterator == 0) break;
+            order = _orders[price][iterator];
         }
 
-        if (amount > 0 && cursor != 0) {
-            _orders[price][cursor].underlyingAmount -= amount;
+        if (amount > 0 && iterator != 0) {
+            _orders[price][iterator].underlyingAmount -= amount;
             // Wrap toTransfer variable to avoid a stack too deep
             {
                 uint256 toTransfer = convertToAccounting(amount, price);
@@ -298,11 +298,11 @@ contract Pool is IPool {
                 accountingToTransfer += toTransfer;
             }
 
-            emit OrderFulfilled(cursor, order.offerer, msg.sender, amount, price, false);
+            emit OrderFulfilled(iterator, order.offerer, msg.sender, amount, price, false);
             amount = 0;
         }
 
-        return (accountingToTransfer, initialAmount - amount, totalStake);
+        return (accountingToTransfer, initialAmount - amount, totalStake, iterator);
     }
 
     // Check in which position a new order would be, given the staked amount and price
@@ -370,9 +370,9 @@ contract Pool is IPool {
 
     // View function to calculate how much accounting the taker needs to take amount
     function previewTakeByPrice(uint256 amount, uint256 price) internal view returns (uint256, uint256) {
-        uint256 cursor = _orders[price][0].next;
-        if (cursor == 0) return (0, 0);
-        Order memory order = _orders[price][cursor];
+        uint256 iterator = _orders[price][0].next;
+        if (iterator == 0) return (0, 0);
+        Order memory order = _orders[price][iterator];
 
         uint256 accountingToTransfer = 0;
         uint256 initialAmount = amount;
@@ -380,13 +380,13 @@ contract Pool is IPool {
             uint256 toTransfer = convertToAccounting(order.underlyingAmount, price);
             accountingToTransfer += toTransfer;
             amount -= order.underlyingAmount;
-            cursor = order.next;
+            iterator = order.next;
             // in case the next is zero, we reached the end of all orders
-            if (cursor == 0) break;
-            order = _orders[price][cursor];
+            if (iterator == 0) break;
+            order = _orders[price][iterator];
         }
 
-        if (amount > 0 && cursor != 0) {
+        if (amount > 0 && iterator != 0) {
             uint256 toTransfer = convertToAccounting(amount, price);
             accountingToTransfer += toTransfer;
             amount = 0;
@@ -415,15 +415,15 @@ contract Pool is IPool {
     }
 
     function volumeByPrice(uint256 price) internal view returns (uint256) {
-        uint256 cursor = _orders[price][0].next;
-        if (cursor == 0) return 0;
-        Order memory order = _orders[price][cursor];
+        uint256 iterator = _orders[price][0].next;
+        if (iterator == 0) return 0;
+        Order memory order = _orders[price][iterator];
 
         uint256 volume = 0;
-        while (cursor != 0) {
+        while (iterator != 0) {
             volume += order.underlyingAmount;
-            cursor = order.next;
-            order = _orders[price][cursor];
+            iterator = order.next;
+            order = _orders[price][iterator];
         }
 
         return volume;
