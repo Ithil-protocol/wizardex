@@ -201,10 +201,9 @@ contract Pool is IPool {
         if (order.offerer != msg.sender) revert RestrictedToOwner();
 
         _deleteNode(price, index);
-
         // If the order is the only one of the priceLevel, update price levels
         if (_orders[price][0].next == 0) {
-            uint256 higherPrice = _nextPriceLevels[0];
+            uint256 higherPrice = 0;
             while (_nextPriceLevels[higherPrice] > price) higherPrice = _nextPriceLevels[higherPrice];
             _nextPriceLevels[higherPrice] = _nextPriceLevels[price];
             delete _nextPriceLevels[price];
