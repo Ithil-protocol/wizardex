@@ -139,6 +139,7 @@ contract Pool is IPool {
             // we approximate it with the nearest one, with priority upwards
             if (
                 (!_checkMidSpacing(_nextPriceLevels[higherPrice], price) || !_checkMidSpacing(price, higherPrice)) &&
+                _nextPriceLevels[higherPrice] != 0 &&
                 higherPrice != 0
             ) {
                 price = price - _nextPriceLevels[higherPrice] < higherPrice - price
@@ -147,6 +148,8 @@ contract Pool is IPool {
                 updatePrices = false;
             }
 
+            // In case updatePrices = false we have fallen into already existing price levels
+            // therefore we only need to update prices if the flag is true
             if (updatePrices) {
                 _nextPriceLevels[price] = _nextPriceLevels[higherPrice];
                 _nextPriceLevels[higherPrice] = price;
@@ -337,6 +340,7 @@ contract Pool is IPool {
             // we approximate it with the nearest one, with priority upwards
             if (
                 (!_checkMidSpacing(_nextPriceLevels[higherPrice], price) || !_checkMidSpacing(price, higherPrice)) &&
+                _nextPriceLevels[higherPrice] != 0 &&
                 higherPrice != 0
             ) {
                 actualPrice = price - _nextPriceLevels[higherPrice] < higherPrice - price
