@@ -323,6 +323,23 @@ contract PoolUnitTest is Test {
         assertEq(newVolumes[2].volume, oldVolumes[1].volume);
         assertEq(newVolumes[3].price, oldVolumes[2].price);
         assertEq(newVolumes[3].volume, oldVolumes[2].volume);
+        oldVolumes = newVolumes;
+
+        // price lower than all prices but not respecting tick spacing
+        amountMade = 0.7e6;
+        price = oldVolumes[3].price - 1;
+        (, , , , actualPrice) = swapper.previewOrder(price, 0);
+        assertEq(actualPrice, oldVolumes[3].price);
+        swapper.createOrder(amountMade, price, address(this), block.timestamp + 1000);
+        newVolumes = swapper.volumes(0, 0, 4);
+        assertEq(newVolumes[0].price, oldVolumes[0].price);
+        assertEq(newVolumes[0].volume, oldVolumes[0].volume);
+        assertEq(newVolumes[1].price, oldVolumes[1].price);
+        assertEq(newVolumes[1].volume, oldVolumes[1].volume);
+        assertEq(newVolumes[2].price, oldVolumes[2].price);
+        assertEq(newVolumes[2].volume, oldVolumes[2].volume);
+        assertEq(newVolumes[3].price, oldVolumes[3].price);
+        assertEq(newVolumes[3].volume, oldVolumes[3].volume + amountMade);
     }
 
     function testVolumesCancel() public {
