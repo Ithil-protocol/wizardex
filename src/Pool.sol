@@ -123,6 +123,7 @@ contract Pool is IPool {
         }
 
         if (_nextPriceLevels[higherPrice] < price) {
+            bool updatePrices = true;
             // If price is the highest so far and too close to the previous highest
             // round it up to the smallest available tick
             if (!_checkExtSpacing(_nextPriceLevels[higherPrice], price) && higherPrice == 0) {
@@ -132,20 +133,27 @@ contract Pool is IPool {
             // round it up to the previous lowest
             if (!_checkExtSpacing(price, higherPrice) && _nextPriceLevels[higherPrice] == 0 && higherPrice != 0) {
                 price = higherPrice;
+                updatePrices = false;
             }
             // If price is in the middle of two price levels and does not respect tick spacing
             // we approximate it with the nearest one, with priority upwards
             if (
-                !_checkMidSpacing(_nextPriceLevels[higherPrice], price) ||
-                (!_checkMidSpacing(price, higherPrice) && higherPrice != 0)
+                (!_checkMidSpacing(_nextPriceLevels[higherPrice], price) || !_checkMidSpacing(price, higherPrice)) &&
+                _nextPriceLevels[higherPrice] != 0 &&
+                higherPrice != 0
             ) {
                 price = price - _nextPriceLevels[higherPrice] < higherPrice - price
                     ? _nextPriceLevels[higherPrice]
                     : higherPrice;
+                updatePrices = false;
             }
 
-            _nextPriceLevels[price] = _nextPriceLevels[higherPrice];
-            _nextPriceLevels[higherPrice] = price;
+            // In case updatePrices = false we have fallen into already existing price levels
+            // therefore we only need to update prices if the flag is true
+            if (updatePrices) {
+                _nextPriceLevels[price] = _nextPriceLevels[higherPrice];
+                _nextPriceLevels[higherPrice] = price;
+            }
         }
 
         // The "next" index of the last order is 0
@@ -319,19 +327,21 @@ contract Pool is IPool {
         if (_nextPriceLevels[higherPrice] < price) {
             // If price is the highest so far and too close to the previous highest
             // round it up to the smallest available tick
-            if (!_checkExtSpacing(_nextPriceLevels[higherPrice], price) && higherPrice == 0)
+            if (!_checkExtSpacing(_nextPriceLevels[higherPrice], price) && higherPrice == 0) {
                 actualPrice = _nextPriceLevels[higherPrice].mulDiv(tick + 10000, 10000, Math.Rounding.Up);
-
+            }
             // If price is the lowest so far and too close to the previous lowest
             // round it up to the previous lowest
-            if (!_checkExtSpacing(price, higherPrice) && _nextPriceLevels[higherPrice] == 0 && higherPrice != 0)
+            if (!_checkExtSpacing(price, higherPrice) && _nextPriceLevels[higherPrice] == 0 && higherPrice != 0) {
                 actualPrice = higherPrice;
+            }
 
             // If price is in the middle of two price levels and does not respect tick spacing
             // we approximate it with the nearest one, with priority upwards
             if (
-                !_checkMidSpacing(_nextPriceLevels[higherPrice], price) ||
-                (!_checkMidSpacing(price, higherPrice) && higherPrice != 0)
+                (!_checkMidSpacing(_nextPriceLevels[higherPrice], price) || !_checkMidSpacing(price, higherPrice)) &&
+                _nextPriceLevels[higherPrice] != 0 &&
+                higherPrice != 0
             ) {
                 actualPrice = price - _nextPriceLevels[higherPrice] < higherPrice - price
                     ? _nextPriceLevels[higherPrice]
