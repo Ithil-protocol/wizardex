@@ -3,6 +3,7 @@ pragma solidity =0.8.17;
 
 import { IERC20, IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { ERC20PresetMinterPauser } from "@openzeppelin/contracts/token/ERC20/presets/ERC20PresetMinterPauser.sol";
+import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { Test } from "forge-std/Test.sol";
 import { Factory } from "../src/Factory.sol";
 import { Pool } from "../src/Pool.sol";
@@ -10,6 +11,8 @@ import { IPool } from "../src/interfaces/IPool.sol";
 import { Wallet } from "./Wallet.sol";
 
 contract PoolUnitTest is Test {
+    using Math for uint256;
+
     Factory internal immutable factory;
     Pool internal immutable swapper;
 
@@ -238,80 +241,120 @@ contract PoolUnitTest is Test {
         underlying.mint(address(this), type(uint256).max);
         underlying.approve(address(swapper), type(uint256).max);
 
-        uint256 amountMade1 = 1e6;
-        uint256 price1 = 2000e6;
-        swapper.createOrder(amountMade1, price1, address(this), block.timestamp + 1000);
-        IPool.Volume[] memory volumes = swapper.volumes(0, 0, 3);
-        assertEq(volumes[0].price, price1);
-        assertEq(volumes[0].volume, amountMade1);
-        assertEq(volumes[1].price, 0);
-        assertEq(volumes[1].volume, 0);
-        assertEq(volumes[2].price, 0);
-        assertEq(volumes[2].volume, 0);
+        // A price
+        uint256 amountMade = 1e6;
+        uint256 price = 2000e6;
+        swapper.createOrder(amountMade, price, address(this), block.timestamp + 1000);
+        IPool.Volume[] memory oldVolumes = swapper.volumes(0, 0, 4);
+        assertEq(oldVolumes[0].price, price);
+        assertEq(oldVolumes[0].volume, amountMade);
+        assertEq(oldVolumes[1].price, 0);
+        assertEq(oldVolumes[1].volume, 0);
+        assertEq(oldVolumes[2].price, 0);
+        assertEq(oldVolumes[2].volume, 0);
 
-        uint256 amountMade2 = 0.5e6;
-        uint256 price2 = price1;
-        swapper.createOrder(amountMade2, price2, address(this), block.timestamp + 1000);
-        volumes = swapper.volumes(0, 0, 3);
-        assertEq(volumes[0].price, price1);
-        assertEq(volumes[0].volume, amountMade1 + amountMade2);
-        assertEq(volumes[1].price, 0);
-        assertEq(volumes[1].volume, 0);
-        assertEq(volumes[2].price, 0);
-        assertEq(volumes[2].volume, 0);
+        // Price equal to an existing price
+        amountMade = 0.5e6;
+        swapper.createOrder(amountMade, price, address(this), block.timestamp + 1000);
+        IPool.Volume[] memory newVolumes = swapper.volumes(0, 0, 4);
+        assertEq(newVolumes[0].price, oldVolumes[0].price);
+        assertEq(newVolumes[0].volume, oldVolumes[0].volume + amountMade);
+        assertEq(newVolumes[1].price, 0);
+        assertEq(newVolumes[1].volume, 0);
+        assertEq(newVolumes[2].price, 0);
+        assertEq(newVolumes[2].volume, 0);
+        oldVolumes = newVolumes;
 
-        uint256 amountMade3 = 2e6;
-        uint256 price3 = 2100e6;
-        swapper.createOrder(amountMade3, price3, address(this), block.timestamp + 1000);
-        volumes = swapper.volumes(0, 0, 3);
-        assertEq(volumes[0].price, price3);
-        assertEq(volumes[0].volume, amountMade3);
-        assertEq(volumes[1].price, price1);
-        assertEq(volumes[1].volume, amountMade1 + amountMade2);
-        assertEq(volumes[2].price, 0);
-        assertEq(volumes[2].volume, 0);
+        // Price higher than all prices
+        amountMade = 2e6;
+        price = 2100e6;
+        swapper.createOrder(amountMade, price, address(this), block.timestamp + 1000);
+        newVolumes = swapper.volumes(0, 0, 4);
+        assertEq(newVolumes[0].price, price);
+        assertEq(newVolumes[0].volume, amountMade);
+        assertEq(newVolumes[1].price, oldVolumes[0].price);
+        assertEq(newVolumes[1].volume, oldVolumes[0].volume);
+        assertEq(newVolumes[2].price, 0);
+        assertEq(newVolumes[2].volume, 0);
+        oldVolumes = newVolumes;
 
-        uint256 amountMade4 = 3e6;
-        uint256 price4 = 1900e6;
-        swapper.createOrder(amountMade4, price4, address(this), block.timestamp + 1000);
-        volumes = swapper.volumes(0, 0, 3);
-        assertEq(volumes[0].price, price3);
-        assertEq(volumes[0].volume, amountMade3);
-        assertEq(volumes[1].price, price1);
-        assertEq(volumes[1].volume, amountMade1 + amountMade2);
-        assertEq(volumes[2].price, price4);
-        assertEq(volumes[2].volume, amountMade4);
+        // price lower than all prices
+        amountMade = 3e6;
+        price = 1900e6;
+        swapper.createOrder(amountMade, price, address(this), block.timestamp + 1000);
+        newVolumes = swapper.volumes(0, 0, 4);
+        assertEq(newVolumes[0].price, oldVolumes[0].price);
+        assertEq(newVolumes[0].volume, oldVolumes[0].volume);
+        assertEq(newVolumes[1].price, oldVolumes[1].price);
+        assertEq(newVolumes[1].volume, oldVolumes[1].volume);
+        assertEq(newVolumes[2].price, price);
+        assertEq(newVolumes[2].volume, amountMade);
+        oldVolumes = newVolumes;
+
+        // price in the middle of two existing prices not respecting tick spacing
+        amountMade = 7e6;
+        price = oldVolumes[1].price + 1;
+        (, , , , uint256 actualPrice) = swapper.previewOrder(price, 0);
+        assertEq(actualPrice, oldVolumes[1].price);
+        swapper.createOrder(amountMade, price, address(this), block.timestamp + 1000);
+        newVolumes = swapper.volumes(0, 0, 4);
+        assertEq(newVolumes[0].price, oldVolumes[0].price);
+        assertEq(newVolumes[0].volume, oldVolumes[0].volume);
+        assertEq(newVolumes[1].price, oldVolumes[1].price);
+        assertEq(newVolumes[1].volume, oldVolumes[1].volume + amountMade);
+        assertEq(newVolumes[2].price, oldVolumes[2].price);
+        assertEq(newVolumes[2].volume, oldVolumes[2].volume);
+        assertEq(newVolumes[3].price, 0);
+        assertEq(newVolumes[3].volume, 0);
+        oldVolumes = newVolumes;
+
+        // price higher than all prices but not respecting tick spacing
+        amountMade = 13.5e6;
+        price = oldVolumes[0].price + 1;
+        (, , , , actualPrice) = swapper.previewOrder(price, 0);
+        assertEq(actualPrice, oldVolumes[0].price.mulDiv(10000 + tick, 10000, Math.Rounding.Up));
+        swapper.createOrder(amountMade, price, address(this), block.timestamp + 1000);
+        newVolumes = swapper.volumes(0, 0, 4);
+        assertEq(newVolumes[0].price, actualPrice);
+        assertEq(newVolumes[0].volume, amountMade);
+        assertEq(newVolumes[1].price, oldVolumes[0].price);
+        assertEq(newVolumes[1].volume, oldVolumes[0].volume);
+        assertEq(newVolumes[2].price, oldVolumes[1].price);
+        assertEq(newVolumes[2].volume, oldVolumes[1].volume);
+        assertEq(newVolumes[3].price, oldVolumes[2].price);
+        assertEq(newVolumes[3].volume, oldVolumes[2].volume);
     }
 
     function testVolumesCancel() public {
         testVolumesMake();
-        IPool.Volume[] memory volumes1 = swapper.volumes(0, 0, 3);
+        IPool.Volume[] memory volumes1 = swapper.volumes(0, 0, 4);
 
         swapper.cancelOrder(1, volumes1[0].price);
-        IPool.Volume[] memory volumes2 = swapper.volumes(0, 0, 3);
+        IPool.Volume[] memory volumes2 = swapper.volumes(0, 0, 4);
         assertEq(volumes2[0].price, volumes1[1].price);
         assertEq(volumes2[0].volume, volumes1[1].volume);
         assertEq(volumes2[1].price, volumes1[2].price);
         assertEq(volumes2[1].volume, volumes1[2].volume);
-        assertEq(volumes2[2].price, 0);
-        assertEq(volumes2[2].volume, 0);
+        assertEq(volumes2[2].price, volumes1[3].price);
+        assertEq(volumes2[2].volume, volumes1[3].volume);
 
+        IPool.Order memory order = swapper.getOrder(volumes2[1].price, 1);
         swapper.cancelOrder(1, volumes2[1].price);
-        IPool.Volume[] memory volumes3 = swapper.volumes(0, 0, 3);
+        IPool.Volume[] memory volumes3 = swapper.volumes(0, 0, 4);
         assertEq(volumes3[0].price, volumes2[0].price);
         assertEq(volumes3[0].volume, volumes2[0].volume);
-        assertEq(volumes3[1].price, 0);
-        assertEq(volumes3[1].volume, 0);
-        assertEq(volumes3[2].price, 0);
-        assertEq(volumes3[2].volume, 0);
+        assertEq(volumes3[1].price, volumes2[1].price);
+        assertEq(volumes3[1].volume, volumes2[1].volume - order.underlyingAmount);
+        assertEq(volumes3[2].price, volumes2[2].price);
+        assertEq(volumes3[2].volume, volumes2[2].volume);
 
-        IPool.Order memory order = swapper.getOrder(volumes3[0].price, 1);
+        order = swapper.getOrder(volumes3[0].price, 1);
         swapper.cancelOrder(1, volumes3[0].price);
-        IPool.Volume[] memory volumes4 = swapper.volumes(0, 0, 3);
-        assertEq(volumes4[0].price, volumes3[0].price);
-        assertEq(volumes4[0].volume, volumes3[0].volume - order.underlyingAmount);
-        assertEq(volumes4[1].price, 0);
-        assertEq(volumes4[1].volume, 0);
+        IPool.Volume[] memory volumes4 = swapper.volumes(0, 0, 4);
+        assertEq(volumes4[0].price, volumes3[1].price);
+        assertEq(volumes4[0].volume, volumes3[1].volume);
+        assertEq(volumes4[1].price, volumes3[2].price);
+        assertEq(volumes4[1].volume, volumes3[2].volume);
         assertEq(volumes4[2].price, 0);
         assertEq(volumes4[2].volume, 0);
     }
@@ -321,14 +364,14 @@ contract PoolUnitTest is Test {
         accounting.mint(address(this), type(uint256).max);
         accounting.approve(address(swapper), type(uint256).max);
 
-        IPool.Volume[] memory volumes1 = swapper.volumes(0, 0, 3);
+        IPool.Volume[] memory volumes1 = swapper.volumes(0, 0, 4);
         swapper.fulfillOrder(volumes1[0].volume, address(this), 0, type(uint256).max, block.timestamp + 1000);
-        IPool.Volume[] memory volumes2 = swapper.volumes(0, 0, 3);
+        IPool.Volume[] memory volumes2 = swapper.volumes(0, 0, 4);
         assertEq(volumes2[0].price, volumes1[1].price);
         assertEq(volumes2[0].volume, volumes1[1].volume);
         assertEq(volumes2[1].price, volumes1[2].price);
         assertEq(volumes2[1].volume, volumes1[2].volume);
-        assertEq(volumes2[2].price, 0);
-        assertEq(volumes2[2].volume, 0);
+        assertEq(volumes2[2].price, volumes1[3].price);
+        assertEq(volumes2[2].volume, volumes1[3].volume);
     }
 }
