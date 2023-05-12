@@ -7,7 +7,7 @@ import { Pool } from "./Pool.sol";
 
 contract Factory is IFactory, Ownable {
     // Declare a mapping that stores the addresses of pools created for each underlying and accounting address pair
-    mapping(address => mapping(address => address)) public override pools;
+    mapping(address => mapping(address => mapping(uint16 => address))) public override pools;
     // Declare a mapping that stores whether a given tick spacing is supported
     mapping(uint16 => bool) public override tickSupported;
 
@@ -47,20 +47,20 @@ contract Factory is IFactory, Ownable {
         if (token0 == token1) revert TokenMismatch();
 
         // If the pool for the given token pair does not exist, create it
-        if (pools[token0][token1] == address(0)) {
-            pools[token0][token1] = address(new Pool(token0, token1, tickSpacing));
+        if (pools[token0][token1][tickSpacing] == address(0)) {
+            pools[token0][token1][tickSpacing] = address(new Pool(token0, token1, tickSpacing));
 
             emit NewPool(token0, token1, tickSpacing);
         }
 
         // If the pool for the reverse token pair does not exist, create it
-        if (pools[token1][token0] == address(0)) {
-            pools[token1][token0] = address(new Pool(token1, token0, tickSpacing));
+        if (pools[token1][token0][tickSpacing] == address(0)) {
+            pools[token1][token0][tickSpacing] = address(new Pool(token1, token0, tickSpacing));
 
             emit NewPool(token1, token0, tickSpacing);
         }
 
-        return (pools[token0][token1], pools[token1][token0]);
+        return (pools[token0][token1][tickSpacing], pools[token1][token0][tickSpacing]);
     }
 
     receive() external payable {}
