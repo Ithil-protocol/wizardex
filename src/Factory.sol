@@ -6,8 +6,9 @@ import { IFactory } from "./interfaces/IFactory.sol";
 import { Pool } from "./Pool.sol";
 
 contract Factory is IFactory, Ownable {
-    // underlying => accounting => pool address
+    // Declare a mapping that stores the addresses of pools created for each underlying and accounting address pair
     mapping(address => mapping(address => address)) public override pools;
+    // Declare a mapping that stores whether a given tick spacing is supported    
     mapping(uint16 => bool) public override tickSupported;
 
     event NewPool(address indexed underlying, address indexed accounting, uint256 indexed tickSpacing);
@@ -17,22 +18,26 @@ contract Factory is IFactory, Ownable {
     error TokenMismatch();
 
     constructor() {
+        // Set the tick support for the initial tick spacings
         tickSupported[1] = true;
         tickSupported[5] = true;
         tickSupported[10] = true;
     }
 
+    // Define a function that toggles the support for a given tick spacing
     function toggleSupportedTick(uint16 tick) external onlyOwner {
         tickSupported[tick] = !tickSupported[tick];
 
         emit TickToggled(tick, tickSupported[tick]);
     }
 
+    // Define a function that transfers all the ether held by the contract to a given address
     function sweep(address to) external onlyOwner {
         (bool success, ) = to.call{ value: address(this).balance }("");
         assert(success);
     }
 
+    // Define a function that creates a new pool for a given token pair and tick spacing
     function createPool(address token0, address token1, uint16 tickSpacing)
         external
         override
@@ -41,12 +46,14 @@ contract Factory is IFactory, Ownable {
         if (!tickSupported[tickSpacing]) revert UnsupportedTick();
         if (token0 == token1) revert TokenMismatch();
 
+        // If the pool for the given token pair does not exist, create it
         if (pools[token0][token1] == address(0)) {
             pools[token0][token1] = address(new Pool(token0, token1, tickSpacing));
 
             emit NewPool(token0, token1, tickSpacing);
         }
 
+        // If the pool for the reverse token pair does not exist, create it
         if (pools[token1][token0] == address(0)) {
             pools[token1][token0] = address(new Pool(token1, token0, tickSpacing));
 
