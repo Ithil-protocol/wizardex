@@ -8,7 +8,7 @@ import { Pool } from "./Pool.sol";
 contract Factory is IFactory, Ownable {
     // Declare a mapping that stores the addresses of pools created for each underlying and accounting address pair
     mapping(address => mapping(address => address)) public override pools;
-    // Declare a mapping that stores whether a given tick spacing is supported    
+    // Declare a mapping that stores whether a given tick spacing is supported
     mapping(uint16 => bool) public override tickSupported;
 
     event NewPool(address indexed underlying, address indexed accounting, uint256 indexed tickSpacing);
