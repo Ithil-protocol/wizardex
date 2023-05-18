@@ -55,6 +55,7 @@ and add the following content:
 
 ```text
 ARBITRUM_RPC_URL="https://..." needed to run arbitrum fork tests
+ETHERSCAN_API_KEY="" to verify contracts on the block explorer
 ```
 
 Load it in your local env with `source .env` and finally you can compile the contracts:
