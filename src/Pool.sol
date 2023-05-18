@@ -281,7 +281,6 @@ contract Pool is IPool {
         while (amount >= order.underlyingAmount) {
             _deleteNode(price, iterator);
             amount -= order.underlyingAmount;
-            iterator = order.next;
             // Wrap toTransfer variable to avoid a stack too deep
             {
                 uint256 toTransfer = convertToAccounting(order.underlyingAmount, price);
@@ -291,6 +290,7 @@ contract Pool is IPool {
             }
 
             emit OrderFulfilled(iterator, order.offerer, msg.sender, order.underlyingAmount, price, true);
+            iterator = order.next;
             // in case the next is zero, we reached the end of all orders
             if (iterator == 0) break;
             order = _orders[price][iterator];
